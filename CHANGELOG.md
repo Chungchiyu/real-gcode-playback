@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.4.3 (2026-10-09)
+- Fixed playback running far too fast in the first part of Bambu Lab prints with bed leveling (since 1.3.0)
+
 ## v1.4.2 (2026-10-09)
 - Pausing when you click another tab now works in OrcaSlicer
 

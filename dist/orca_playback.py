@@ -5,12 +5,14 @@
 # name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
-# version = "1.4.2"
+# version = "1.4.3"
 # ///
 """Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
+1.4.3 (2026-10-09)
+  - Fixed playback running far too fast in the first part of Bambu Lab prints with bed leveling (since 1.3.0)
 1.4.2 (2026-10-09)
   - Pausing when you click another tab now works in OrcaSlicer
 1.4.1 (2026-10-09)
@@ -95,8 +97,15 @@ SETUP_HINT = {
 }
 
 CHANGELOG = {
- "version": "1.4.2",
+ "version": "1.4.3",
  "entries": [
+  {
+   "version": "1.4.3",
+   "date": "2026-10-09",
+   "changes": [
+    "Fixed playback running far too fast in the first part of Bambu Lab prints with bed leveling (since 1.3.0)"
+   ]
+  },
   {
    "version": "1.4.2",
    "date": "2026-10-09",
@@ -520,7 +529,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>window.PLAYBACK_ABOUT = {"version": "1.4.2", "entries": [{"version": "1.4.2", "date": "2026-10-09", "changes": ["Pausing when you click another tab now works in OrcaSlicer"]}, {"version": "1.4.1", "date": "2026-10-09", "changes": ["Clearer setup instructions on the start screen"]}, {"version": "1.4.0", "date": "2026-10-09", "changes": ["Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)", "Option to keep playing when you leave the Playback tab"]}, {"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+<script>window.PLAYBACK_ABOUT = {"version": "1.4.3", "entries": [{"version": "1.4.3", "date": "2026-10-09", "changes": ["Fixed playback running far too fast in the first part of Bambu Lab prints with bed leveling (since 1.3.0)"]}, {"version": "1.4.2", "date": "2026-10-09", "changes": ["Pausing when you click another tab now works in OrcaSlicer"]}, {"version": "1.4.1", "date": "2026-10-09", "changes": ["Clearer setup instructions on the start screen"]}, {"version": "1.4.0", "date": "2026-10-09", "changes": ["Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)", "Option to keep playing when you leave the Playback tab"]}, {"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
 /* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
@@ -1187,46 +1196,69 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
      we trust its clock and only use our planner for what happens *between* the markers. */
   function applyTiming(job, align) {
     const n = job.moves, t0p = job.plannerT0, dp = job.plannerDur, F = job.flags;
-    /* Only motion is stretched to fit the estimate. Fixed waits (G4, M400 S/P, the G29 budget) last
-       exactly what they say in both clocks, so they are taken out of both sides before mapping. */
-    const fixedBefore = new Float64Array(n + 1);          // fixed-wait time before move k (planner clock)
-    for (let k = 0; k < n; k++) fixedBefore[k + 1] = fixedBefore[k] + ((F[k] & FL_DWELL) ? dp[k] : 0);
-    const fixedTotal = fixedBefore[n];
-    const motionAt = (k) => (k < n ? t0p[k] : job.plannerTotal) - fixedBefore[Math.min(k, n)];
-    const motionTotal = job.plannerTotal - fixedTotal, targetMotion = job.estimate - fixedTotal;
-    const knotsA = [0], knotsB = [0];
-    let usable = align && job.estimate > 0 && job.m73.length >= 3 && motionTotal > 0 && targetMotion > 0;
-    if (usable) {
+    /* Each stretch between two markers is fitted on its own: its motion is scaled so the stretch
+       lasts what the slicer says, while fixed waits (G4, M400 S/P, the G29 budget) keep their length.
+       Markers that don't leave room for a stretch's fixed waits (the slicer books a wait a few moves
+       away from where it sits in the file, e.g. the 260 s for G29 lands on the moves before it)
+       are dropped, merging that stretch with the previous one, so a mismatch stays local. */
+    const isFixed = (k) => (F[k] & FL_DWELL) !== 0;
+    const t0 = new Float64Array(n), dur = new Float32Array(n);
+    // knots: [move index, slicer time at that move]
+    let knots = null;
+    if (align && job.estimate > 0 && job.m73.length >= 3 && n > 0) {
+      knots = [[0, 0]];
       let lastP = -1;
       for (const mk of job.m73) {
         if (mk.p <= lastP || mk.p <= 0 || mk.p >= 100) continue;
-        const ta = motionAt(mk.move);
-        const tb = job.estimate * mk.p / 100 - fixedBefore[Math.min(mk.move, n)];
-        if (ta <= knotsA[knotsA.length - 1] + 1e-6 || tb <= knotsB[knotsB.length - 1] + 1e-6) continue;
-        knotsA.push(ta); knotsB.push(tb); lastP = mk.p;
+        const k = Math.min(mk.move, n), tb = job.estimate * mk.p / 100;
+        if (k <= knots[knots.length - 1][0]) continue;
+        knots.push([k, tb]); lastP = mk.p;
       }
-      knotsA.push(motionTotal); knotsB.push(Math.max(targetMotion, knotsB[knotsB.length - 1] + 1e-3));
-      // sanity: wildly different totals mean the markers belong to some other clock (e.g. silent mode)
-      const ratio = targetMotion / motionTotal;
-      if (knotsA.length < 4 || ratio < 0.3 || ratio > 3) usable = false;
+      if (knots[knots.length - 1][0] < n) knots.push([n, job.estimate]);
+      else knots[knots.length - 1][1] = Math.max(knots[knots.length - 1][1], job.estimate);
+      // per-stretch planner motion and fixed time
+      const sums = (a, b) => {
+        let m = 0, f = 0;
+        for (let k = a; k < b; k++) { if (isFixed(k)) f += dp[k]; else m += dp[k]; }
+        return [m, f];
+      };
+      let changed = true;
+      while (changed && knots.length > 2) {
+        changed = false;
+        for (let i = 1; i < knots.length; i++) {
+          const [a, ta] = knots[i - 1], [b, tb] = knots[i];
+          const [m, f] = sums(a, b);
+          if (tb - ta < f - 1e-6 || (m > 0 && tb - ta <= f + 1e-6)) {
+            // not enough slicer time for this stretch's waits: the slicer booked them earlier, so
+            // merge with the stretch before (drop the knot at its start); the first stretch merges forward
+            knots.splice(i > 1 ? i - 1 : (knots.length > 2 ? 1 : i), 1);
+            changed = true; break;
+          }
+        }
+      }
+      const fixedTotal = sums(0, n)[1], motionTotal = job.plannerTotal - fixedTotal;
+      const ratio = (job.estimate - fixedTotal) / Math.max(1e-9, motionTotal);
+      // wildly different totals mean the markers belong to some other clock (e.g. silent mode)
+      if (knots.length < 4 || !(motionTotal > 0) || ratio < 0.3 || ratio > 3) knots = null;
     }
-    const t0 = new Float64Array(n), dur = new Float32Array(n);
-    if (!usable) {
+    if (!knots) {
       t0.set(t0p); dur.set(dp);
       job.total = job.plannerTotal; job.aligned = false;
     } else {
-      let seg = 0;
-      const map = (ta) => {
-        while (seg < knotsA.length - 2 && ta > knotsA[seg + 1]) seg++;
-        const a0 = knotsA[seg], a1 = knotsA[seg + 1], b0 = knotsB[seg], b1 = knotsB[seg + 1];
-        return b0 + (b1 - b0) * (a1 > a0 ? (ta - a0) / (a1 - a0) : 0);
-      };
       let t = 0;
-      for (let k = 0; k < n; k++) {
-        t0[k] = t;
-        if (F[k] & FL_DWELL) { dur[k] = dp[k]; }
-        else { const a = motionAt(k); dur[k] = Math.max(0, map(a + dp[k]) - map(a)); }
-        t += dur[k];
+      for (let i = 1; i < knots.length; i++) {
+        const [a, ta] = knots[i - 1], [b, tb] = knots[i];
+        let m = 0, f = 0;
+        for (let k = a; k < b; k++) { if (isFixed(k)) f += dp[k]; else m += dp[k]; }
+        const span = Math.max(0, tb - ta);
+        // motion gets what is left after the waits; a stretch of waits only is scaled as a whole
+        const ms = m > 0 ? Math.max(0, span - f) / m : 0;
+        const fs = m > 0 ? (span >= f ? 1 : span / Math.max(f, 1e-9)) : (f > 0 ? span / f : 1);
+        for (let k = a; k < b; k++) {
+          t0[k] = t;
+          dur[k] = dp[k] * (isFixed(k) ? fs : ms);
+          t += dur[k];
+        }
       }
       job.total = t; job.aligned = true;
     }

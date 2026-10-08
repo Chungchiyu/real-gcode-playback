@@ -664,46 +664,69 @@
      we trust its clock and only use our planner for what happens *between* the markers. */
   function applyTiming(job, align) {
     const n = job.moves, t0p = job.plannerT0, dp = job.plannerDur, F = job.flags;
-    /* Only motion is stretched to fit the estimate. Fixed waits (G4, M400 S/P, the G29 budget) last
-       exactly what they say in both clocks, so they are taken out of both sides before mapping. */
-    const fixedBefore = new Float64Array(n + 1);          // fixed-wait time before move k (planner clock)
-    for (let k = 0; k < n; k++) fixedBefore[k + 1] = fixedBefore[k] + ((F[k] & FL_DWELL) ? dp[k] : 0);
-    const fixedTotal = fixedBefore[n];
-    const motionAt = (k) => (k < n ? t0p[k] : job.plannerTotal) - fixedBefore[Math.min(k, n)];
-    const motionTotal = job.plannerTotal - fixedTotal, targetMotion = job.estimate - fixedTotal;
-    const knotsA = [0], knotsB = [0];
-    let usable = align && job.estimate > 0 && job.m73.length >= 3 && motionTotal > 0 && targetMotion > 0;
-    if (usable) {
+    /* Each stretch between two markers is fitted on its own: its motion is scaled so the stretch
+       lasts what the slicer says, while fixed waits (G4, M400 S/P, the G29 budget) keep their length.
+       Markers that don't leave room for a stretch's fixed waits (the slicer books a wait a few moves
+       away from where it sits in the file, e.g. the 260 s for G29 lands on the moves before it)
+       are dropped, merging that stretch with the previous one, so a mismatch stays local. */
+    const isFixed = (k) => (F[k] & FL_DWELL) !== 0;
+    const t0 = new Float64Array(n), dur = new Float32Array(n);
+    // knots: [move index, slicer time at that move]
+    let knots = null;
+    if (align && job.estimate > 0 && job.m73.length >= 3 && n > 0) {
+      knots = [[0, 0]];
       let lastP = -1;
       for (const mk of job.m73) {
         if (mk.p <= lastP || mk.p <= 0 || mk.p >= 100) continue;
-        const ta = motionAt(mk.move);
-        const tb = job.estimate * mk.p / 100 - fixedBefore[Math.min(mk.move, n)];
-        if (ta <= knotsA[knotsA.length - 1] + 1e-6 || tb <= knotsB[knotsB.length - 1] + 1e-6) continue;
-        knotsA.push(ta); knotsB.push(tb); lastP = mk.p;
+        const k = Math.min(mk.move, n), tb = job.estimate * mk.p / 100;
+        if (k <= knots[knots.length - 1][0]) continue;
+        knots.push([k, tb]); lastP = mk.p;
       }
-      knotsA.push(motionTotal); knotsB.push(Math.max(targetMotion, knotsB[knotsB.length - 1] + 1e-3));
-      // sanity: wildly different totals mean the markers belong to some other clock (e.g. silent mode)
-      const ratio = targetMotion / motionTotal;
-      if (knotsA.length < 4 || ratio < 0.3 || ratio > 3) usable = false;
+      if (knots[knots.length - 1][0] < n) knots.push([n, job.estimate]);
+      else knots[knots.length - 1][1] = Math.max(knots[knots.length - 1][1], job.estimate);
+      // per-stretch planner motion and fixed time
+      const sums = (a, b) => {
+        let m = 0, f = 0;
+        for (let k = a; k < b; k++) { if (isFixed(k)) f += dp[k]; else m += dp[k]; }
+        return [m, f];
+      };
+      let changed = true;
+      while (changed && knots.length > 2) {
+        changed = false;
+        for (let i = 1; i < knots.length; i++) {
+          const [a, ta] = knots[i - 1], [b, tb] = knots[i];
+          const [m, f] = sums(a, b);
+          if (tb - ta < f - 1e-6 || (m > 0 && tb - ta <= f + 1e-6)) {
+            // not enough slicer time for this stretch's waits: the slicer booked them earlier, so
+            // merge with the stretch before (drop the knot at its start); the first stretch merges forward
+            knots.splice(i > 1 ? i - 1 : (knots.length > 2 ? 1 : i), 1);
+            changed = true; break;
+          }
+        }
+      }
+      const fixedTotal = sums(0, n)[1], motionTotal = job.plannerTotal - fixedTotal;
+      const ratio = (job.estimate - fixedTotal) / Math.max(1e-9, motionTotal);
+      // wildly different totals mean the markers belong to some other clock (e.g. silent mode)
+      if (knots.length < 4 || !(motionTotal > 0) || ratio < 0.3 || ratio > 3) knots = null;
     }
-    const t0 = new Float64Array(n), dur = new Float32Array(n);
-    if (!usable) {
+    if (!knots) {
       t0.set(t0p); dur.set(dp);
       job.total = job.plannerTotal; job.aligned = false;
     } else {
-      let seg = 0;
-      const map = (ta) => {
-        while (seg < knotsA.length - 2 && ta > knotsA[seg + 1]) seg++;
-        const a0 = knotsA[seg], a1 = knotsA[seg + 1], b0 = knotsB[seg], b1 = knotsB[seg + 1];
-        return b0 + (b1 - b0) * (a1 > a0 ? (ta - a0) / (a1 - a0) : 0);
-      };
       let t = 0;
-      for (let k = 0; k < n; k++) {
-        t0[k] = t;
-        if (F[k] & FL_DWELL) { dur[k] = dp[k]; }
-        else { const a = motionAt(k); dur[k] = Math.max(0, map(a + dp[k]) - map(a)); }
-        t += dur[k];
+      for (let i = 1; i < knots.length; i++) {
+        const [a, ta] = knots[i - 1], [b, tb] = knots[i];
+        let m = 0, f = 0;
+        for (let k = a; k < b; k++) { if (isFixed(k)) f += dp[k]; else m += dp[k]; }
+        const span = Math.max(0, tb - ta);
+        // motion gets what is left after the waits; a stretch of waits only is scaled as a whole
+        const ms = m > 0 ? Math.max(0, span - f) / m : 0;
+        const fs = m > 0 ? (span >= f ? 1 : span / Math.max(f, 1e-9)) : (f > 0 ? span / f : 1);
+        for (let k = a; k < b; k++) {
+          t0[k] = t;
+          dur[k] = dp[k] * (isFixed(k) ? fs : ms);
+          t += dur[k];
+        }
       }
       job.total = t; job.aligned = true;
     }

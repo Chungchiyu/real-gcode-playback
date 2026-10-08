@@ -1,6 +1,13 @@
 {
-  "version": "1.4.2",
+  "version": "1.4.3",
   "entries": [
+    {
+      "version": "1.4.3",
+      "date": "2026-10-09",
+      "changes": [
+        "Fixed playback running far too fast in the first part of Bambu Lab prints with bed leveling (since 1.3.0)"
+      ]
+    },
     {
       "version": "1.4.2",
       "date": "2026-10-09",
