@@ -13,6 +13,8 @@
  *   Job.acc          Float32Array acceleration in force for the move (mm/s^2)
  *   Job.wait         Float32Array fixed duration for dwell pseudo-moves (s)
  *   Job.line         Uint32Array  1-based source line number
+ *   Job.hnom         Float32Array nominal line height from the slicer's HEIGHT tag in force (0 = none)
+ *   Job.beadW/beadH  Float32Array actual line width / height of each extrusion (mm), from the G-code
  *   Job.layers       [{z, h, first}]   first = first move index of the layer
  *   Job.events       [{move, kind, label}]
  *   Job.m73          [{move, p}]        Orca/Bambu progress markers (percent of time)
@@ -133,7 +135,7 @@
       flags: new Grow(Uint8Array, est), feat: new Grow(Uint8Array, est), layer: new Grow(Uint32Array, est),
       tool: new Grow(Uint8Array, est), fcmd: new Grow(Float32Array, est), len: new Grow(Float32Array, est),
       de: new Grow(Float32Array, est), acc: new Grow(Float32Array, est), wait: new Grow(Float32Array, est),
-      line: new Grow(Uint32Array, est),
+      line: new Grow(Uint32Array, est), hn: new Grow(Float32Array, est),
     };
     let n = 0;                                   // move count
     const config = {}; const layers = []; const events = []; const m73 = [];
@@ -144,7 +146,7 @@
     let ox = 0, oy = 0, oz = 0;                   // G92 offsets for xyz
     let absXYZ = true, absE = true, fmm = 3000 / 60; // feed in mm/s
     let accPrint = 0, accTravel = 0, accRetract = 0;  // filled from config after the scan
-    let curFeat = 0, curTool = 0, curLayer = 0;
+    let curFeat = 0, curTool = 0, curLayer = 0, curH = 0;
     // Slicer layer markers, when present, are the truth; otherwise layers are inferred from Z.
     let haveLayerComments = /^;\s*(LAYER_CHANGE|CHANGE_LAYER)\s*$/m.test(text.length > 4e6 ? text.substring(0, 4e6) : text);
     let lastExtrudeZ = -1e9, lastExtrudeMove = 0;
@@ -198,7 +200,7 @@
       G.flags.a[n] = flags; G.feat.a[n] = curFeat; G.layer.a[n] = curLayer < 0 ? 0 : curLayer;
       G.tool.a[n] = curTool; G.fcmd.a[n] = fcmd; G.len.a[n] = length; G.de.a[n] = dE;
       G.acc.a[n] = (flags & FL_EXTRUDE) ? accPrint : (flags & FL_EONLY) ? (accRetract || accPrint) : (accTravel || accPrint);
-      G.wait.a[n] = waitS; G.line.a[n] = lineNo;
+      G.wait.a[n] = waitS; G.line.a[n] = lineNo; G.hn.a[n] = curH;
       n++;
     }
     function startLayer(zv, hv) {
@@ -256,7 +258,8 @@
           } else if ((m = /^(?:Z|Z_HEIGHT):\s*([\d.]+)/.exec(t))) {
             if (layers.length && haveLayerComments) layers[layers.length - 1].z = parseFloat(m[1]);
           } else if ((m = /^(?:HEIGHT|LAYER_HEIGHT):\s*([\d.]+)/.exec(t))) {
-            if (layers.length && haveLayerComments) layers[layers.length - 1].h = parseFloat(m[1]);
+            curH = parseFloat(m[1]) || 0;
+            if (layers.length && haveLayerComments) layers[layers.length - 1].h = curH;
           } else if ((m = /^estimated printing time \((normal|silent) mode\)\s*[=:]\s*(.+)$/i.exec(t))) {
             const d = parseDuration(m[2]);
             if (m[1].toLowerCase() === 'normal') { if (d) estimate = d; } else estimateSilent = d;
@@ -457,7 +460,7 @@
       moves: n, pts: P.out((n + 1) * 3),
       flags: G.flags.out(n), feat: G.feat.out(n), layer: G.layer.out(n), tool: G.tool.out(n),
       fcmd: G.fcmd.out(n), len: G.len.out(n), de: G.de.out(n), acc: G.acc.out(n), wait: G.wait.out(n),
-      line: G.line.out(n), layers, events, m73, config, estimate, estimateSilent, lines: lineNo,
+      line: G.line.out(n), hnom: G.hn.out(n), layers, events, m73, config, estimate, estimateSilent, lines: lineNo,
     };
     // drop empty layers produced by consecutive markers
     job.machine = resolveMachine(config, machineCmd);
@@ -472,7 +475,81 @@
     job.flagsFound = Object.values(flagsFound);
     job.skippedMoves = skippedMoves;
     job.bed = resolveBed(job);
+    computeBeads(job);
     return job;
+  }
+
+  /* ---------------------------------------------------------------- line cross-section
+     What each extrusion actually lays down, from the G-code alone. The cross-section area is exact:
+     A = filament fed × filament area ÷ path length. The line height is the gap between the nozzle
+     and the surface below: the slicer's nominal height (HEIGHT tag) plus how far this move sits above
+     or below the layer's Z. That is what Z contouring (z = layer Z + z_diff, E × (h + z_diff) / h) and
+     scarf seams (Z and E ramping up together) change. The width then follows from OrcaSlicer's own
+     rounded-rectangle model, A = h × (w − h × (1 − π/4)), so normal lines come out at the slicer's
+     line width and ramps keep their width while getting thinner. */
+  const BEAD_K = 1 - Math.PI / 4;
+  function computeBeads(job) {
+    const n = job.moves, F = job.flags, P = job.pts, L = job.layers, m = job.machine;
+    const fa = Math.PI * Math.pow((m.filamentDiameter || 1.75) / 2, 2);
+    const noz = m.nozzle || 0.4;
+    const spiral = /^(1|true)$/i.test(String(first(job.config.spiral_mode, 0)));
+    const W = new Float32Array(n), H = new Float32Array(n);
+    const isExt = (k) => (F[k] & FL_EXTRUDE) && !(F[k] & FL_SKIP) && job.len[k] > 0 && job.de[k] > 0;
+    const nominal = (k) => {
+      const li = job.layer[k], lay = L[li] || L[0];
+      let hn = job.hnom[k] || lay.h;
+      if (!(hn > 0)) {
+        const prev = li > 0 ? L[li - 1] : null;
+        hn = prev && lay.z > prev.z ? lay.z - prev.z : (lay.z > 0 && lay.z < noz ? lay.z : noz / 2);
+      }
+      return hn;
+    };
+    const near = noz * 0.3, CELL = 1;
+    for (let li = 0; li < L.length; li++) {
+      const a = L[li].first, b = li + 1 < L.length ? L[li + 1].first : n;
+      const lay = L[li], useZ = !spiral && lay.z > 0;
+      // segments laid below the layer's Z (scarf starts, Z-contoured lines), hashed by position:
+      // a later line on top of one of them (the scarf's closing overlap) rests on it, not on the layer below
+      let grid = null;
+      for (let k = a; k < b; k++) {
+        if (!isExt(k)) continue;
+        const hn = nominal(k);
+        let base = useZ ? lay.z - hn : null;
+        // OrcaSlicer sizes each line's flow from its end point (z and ratios at line.b), so do the same
+        const zm = P[k * 3 + 5];
+        if (grid && useZ) {
+          const mx = P[k * 3 + 3], my = P[k * 3 + 4];
+          const cx = Math.floor(mx / CELL), cy = Math.floor(my / CELL);
+          for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+            const list = grid.get(gx * 65536 + gy); if (!list) continue;
+            for (const j of list) {
+              const ax = P[j * 3], ay = P[j * 3 + 1], bx = P[j * 3 + 3], by = P[j * 3 + 4];
+              const dx = bx - ax, dy = by - ay, d2 = dx * dx + dy * dy;
+              const t = d2 > 0 ? Math.min(1, Math.max(0, ((mx - ax) * dx + (my - ay) * dy) / d2)) : 0;
+              const ex = ax + dx * t - mx, ey = ay + dy * t - my;
+              if (ex * ex + ey * ey > near * near) continue;
+              const top = P[j * 3 + 2] + (P[j * 3 + 5] - P[j * 3 + 2]) * t;
+              if (top < zm - 0.005 && top > base) base = top;
+            }
+          }
+        }
+        let h = useZ ? zm - base : hn;
+        h = Math.min(Math.max(h, 0.005), hn * 1.5, noz * 1.5);
+        const A = job.de[k] * fa / job.len[k];
+        W[k] = Math.min(Math.max(A / h + h * BEAD_K, 0.05), noz * 3);
+        H[k] = h;
+        if (useZ && zm < lay.z - 0.01) {
+          if (!grid) grid = new Map();
+          const x0 = Math.floor(Math.min(P[k * 3], P[k * 3 + 3]) / CELL), x1 = Math.floor(Math.max(P[k * 3], P[k * 3 + 3]) / CELL);
+          const y0 = Math.floor(Math.min(P[k * 3 + 1], P[k * 3 + 4]) / CELL), y1 = Math.floor(Math.max(P[k * 3 + 1], P[k * 3 + 4]) / CELL);
+          if ((x1 - x0 + 1) * (y1 - y0 + 1) <= 64)
+            for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
+              const key = gx * 65536 + gy; let list = grid.get(key); if (!list) grid.set(key, list = []); list.push(k);
+            }
+        }
+      }
+    }
+    job.beadW = W; job.beadH = H;
   }
 
   /* ---------------------------------------------------------------- machine & bed */
@@ -778,7 +855,7 @@
     return { frac: Math.max(0, Math.min(1, s / L)), v: Math.max(0, v) };
   }
 
-  const api = { parseGcode, planJob, applyTiming, moveAt, stateIn, FEATURES, featureId, parseDuration,
+  const api = { parseGcode, planJob, computeBeads, applyTiming, moveAt, stateIn, FEATURES, featureId, parseDuration,
                 FL_EXTRUDE, FL_TRAVEL, FL_EONLY, FL_DWELL, FL_ARC, FL_STOP, FL_SKIP, FLAG_INFO, flagLabel };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PlaybackCore = api;

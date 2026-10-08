@@ -10,7 +10,8 @@ Each move is timed by a motion planner that models acceleration and cornering. T
 - Timeline shows layer bands plus markers for filament changes, pauses and heating waits
 - Live readout of the current layer, line type, actual vs. set speed, volumetric flow, acceleration and the G-code line being run
 - G-code panel: scroll through the whole file; it follows playback, and clicking a line jumps to that moment
-- Colour by line type, actual speed, set speed, volumetric flow, layer time or filament
+- Lines drawn with their actual cross-section from the G-code: scarf seams, Z contouring (Z anti-aliasing), variable-width walls and gap fill show their real width and height
+- Colour by line type, actual speed, set speed, volumetric flow, line height, line width, layer time or filament
 - Shading options: lit round lines, layer contrast, height shading or flat colours
 - Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in Bambu Lab G-code; blocks the printer would skip are not drawn or timed
 - Moving-bed view for bed slingers such as the Bambu Lab A1 and A1 mini

@@ -148,7 +148,7 @@
   let lineMat = null, lineMatPartial = null, thinMat = null;
   function lineWidth() { return Math.max(0.2, (job && job.machine.nozzle) ? job.machine.nozzle * 1.05 : 0.42); }
 
-  function makeLines(pos, col, count) {
+  function makeLines(pos, col, count, bead) {
     if (prefs.lines === 'thin') {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -159,6 +159,7 @@
     }
     const g = new THREE.LineSegmentsGeometry();
     g.setPositions(pos); g.setColors(col);
+    g.setAttribute('instanceBead', new THREE.InstancedBufferAttribute(bead, 2));
     g.instanceCount = count;
     const o = new THREE.LineSegments2(g, lineMat); o.frustumCulled = false;
     return o;
@@ -174,16 +175,57 @@
      (WORLD_UNITS mode). That is exactly a cylinder: turn the distance into a surface normal and
      light it, so extrusions read as round beads instead of flat ribbons. */
   const shadeUniform = { value: 1 };
+  /* Each segment carries its own cross-section (instanceBead = width, height in mm): the bead is an
+     ellipse-ish tube, wide across and as tall as the line really is. The quad is sized by the
+     ellipse's extent across the view, and the fragment test and the lighting normal use the same
+     ellipse, so scarf ramps and Z-contoured lines show their real thickness from the side. */
+  const BEAD_VS_PARS = `
+    attribute vec2 instanceBead;
+    varying vec2 vBead;
+    varying vec3 vUp;
+    varying vec3 vSide;
+    float beadRadius( vec3 dir ) {
+      float a = 0.5 * vBead.x * dot( dir, vSide ), b = 0.5 * vBead.y * dot( dir, vUp );
+      return max( sqrt( a * a + b * b ), 1e-4 );
+    }`;
+  const BEAD_FS_PARS = `
+    varying vec2 vBead;
+    varying vec3 vUp;
+    varying vec3 vSide;
+    float beadRadius( vec3 dir ) {
+      float a = 0.5 * vBead.x * dot( dir, vSide ), b = 0.5 * vBead.y * dot( dir, vUp );
+      return max( sqrt( a * a + b * b ), 1e-4 );
+    }`;
   function shadedLineMaterial() {
     const m = new THREE.LineMaterial({ vertexColors: true, worldUnits: true, linewidth: 0.42 });
     m.onBeforeCompile = (shader) => {
       shader.uniforms.shadeMode = shadeUniform;
+      const vs = shader.vertexShader;
+      shader.vertexShader = vs
+        .replace('attribute vec3 instanceEnd;', 'attribute vec3 instanceEnd;' + BEAD_VS_PARS)
+        .replace('if ( position.x < 0.0 ) offset *= - 1.0;\n\n\t\t\t\tfloat forwardOffset', `if ( position.x < 0.0 ) offset *= - 1.0;
+          vBead = instanceBead;
+          vUp = normalize( ( modelViewMatrix * vec4( 0.0, 0.0, 1.0, 0.0 ) ).xyz );
+          vSide = cross( vUp, worldDir );
+          vSide = length( vSide ) > 1e-4 ? normalize( vSide ) : normalize( cross( worldDir, vec3( 1.0, 0.0, 0.0 ) ) );
+          float beadR = beadRadius( offset );
+          float beadCap = 0.5 * vBead.x;
+
+\t\t\t\tfloat forwardOffset`)
+        .replace('start.xyz += - worldDir * linewidth * 0.5;', 'start.xyz += - worldDir * beadCap;')
+        .replace('end.xyz += worldDir * linewidth * 0.5;', 'end.xyz += worldDir * beadCap;')
+        .replace('offset *= linewidth * 0.5;', 'offset *= beadR;');
+      if (shader.vertexShader.indexOf('offset *= beadR;') < 0 || shader.vertexShader.indexOf('float beadR') < 0)
+        console.warn('Playback: line shader layout changed; per-line widths are off');
       shader.fragmentShader = shader.fragmentShader
-        .replace('uniform float opacity;', 'uniform float opacity;\nuniform float shadeMode;')
+        .replace('uniform float opacity;', 'uniform float opacity;\nuniform float shadeMode;' + BEAD_FS_PARS)
+        .replace('float norm = len / linewidth;', `vec3 beadDir = len > 1e-6 ? delta / len : vSide;
+				float beadRs = beadRadius( beadDir );
+				float norm = len / ( 2.0 * beadRs );`)
         .replace('#include <color_fragment>', `#include <color_fragment>
         #ifdef WORLD_UNITS
           if ( shadeMode > 0.5 ) {
-            float r = linewidth * 0.5;
+            float r = beadRs;
             float s = clamp( len / r, 0.0, 1.0 );
             vec3 ld = normalize( lineDir );
             vec3 toCam = -normalize( p2 );
@@ -191,6 +233,10 @@
             c = length( c ) > 1e-5 ? normalize( c ) : toCam;
             vec3 side = len > 1e-6 ? -delta / len : vec3( 0.0 );
             vec3 N = normalize( side * s + c * sqrt( max( 0.0, 1.0 - s * s ) ) );
+            // round tube -> elliptical bead: normals scale by the inverse of the half-axes
+            float ns = dot( N, vSide ), nu = dot( N, vUp );
+            float ra = max( 0.5 * vBead.x, 1e-3 ), rb = max( 0.5 * vBead.y, 1e-3 ), rm = max( ra, rb );
+            N = normalize( ( N - ns * vSide - nu * vUp ) + vSide * ( ns * rm / ra ) + vUp * ( nu * rm / rb ) );
             vec3 L = normalize( vec3( -0.35, 0.6, 0.72 ) );
             float diff = max( dot( N, L ), 0.0 );
             float spec = pow( max( dot( N, normalize( L + toCam ) ), 0.0 ), 36.0 ) * 0.22;
@@ -216,6 +262,10 @@
     for (let k = 0; k < n; k++) { if (F[k] & C.FL_SKIP) continue; if (F[k] & C.FL_EXTRUDE) segs++; else if (F[k] & C.FL_TRAVEL) travels++; }
     const segMove = new Uint32Array(segs), extPrefix = new Uint32Array(n + 1), travelPrefix = new Uint32Array(n + 1);
     const pos = new Float32Array(segs * 6), tpos = new Float32Array(Math.max(1, travels) * 6);
+    const bead = new Float32Array(Math.max(1, segs) * 2);
+    // "Actual cross-section": each line as wide and tall as the G-code makes it, its centre half its
+    // height below the nozzle (where the plastic is). "Uniform": one width, centred on the path.
+    const real = prefs.lines !== 'uniform', lw = lineWidth();
     let s = 0, tr = 0;
     for (let k = 0; k < n; k++) {
       extPrefix[k] = s; travelPrefix[k] = tr;
@@ -223,6 +273,10 @@
       if (F[k] & C.FL_EXTRUDE) {
         segMove[s] = k;
         pos.set(P.subarray(k * 3, k * 3 + 6), s * 6);
+        if (real && job.beadW[k] > 0) {
+          bead[s * 2] = job.beadW[k]; bead[s * 2 + 1] = job.beadH[k];
+          pos[s * 6 + 2] -= job.beadH[k] / 2; pos[s * 6 + 5] -= job.beadH[k] / 2;
+        } else { bead[s * 2] = lw; bead[s * 2 + 1] = lw; }
         s++;
       } else if (F[k] & C.FL_TRAVEL) {
         tpos.set(P.subarray(k * 3, k * 3 + 6), tr * 6);
@@ -230,7 +284,7 @@
       }
     }
     extPrefix[n] = s; travelPrefix[n] = tr;
-    R.segMove = segMove; R.extPrefix = extPrefix; R.travelPrefix = travelPrefix; R.pos = pos;
+    R.segMove = segMove; R.extPrefix = extPrefix; R.travelPrefix = travelPrefix; R.pos = pos; R.bead = bead;
     R.col = new Float32Array(segs * 6);
     computeColors();
     rebuildObjects();
@@ -245,10 +299,11 @@
   function rebuildObjects() {
     ensureMaterials();
     disposeObj(R.main); disposeObj(R.layerObj); disposeObj(R.partial);
-    R.main = makeLines(R.pos, R.col, 0); bedGroup.add(R.main);
+    R.main = makeLines(R.pos, R.col, 0, R.bead); bedGroup.add(R.main);
     R.layerObj = null; R.layerObjLayer = -1;
     const pg = new THREE.LineSegmentsGeometry();
     pg.setPositions(new Float32Array(6)); pg.setColors(new Float32Array(6));
+    pg.setAttribute('instanceBead', new THREE.InstancedBufferAttribute(new Float32Array(2), 2));
     R.partial = prefs.lines === 'thin'
       ? (() => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
                  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(6), 3)); const o = new THREE.LineSegments(g, thinMat); o.userData.thin = true; o.frustumCulled = false; return o; })()
@@ -273,11 +328,19 @@
     else if (mode === 'fcmd') { value = (k) => job.fcmd[k]; unit = 'mm/s'; }
     else if (mode === 'flow') { value = (k) => job.plannerDur[k] > 0 ? job.de[k] * filArea / job.plannerDur[k] : 0; unit = 'mm³/s'; }
     else if (mode === 'layertime') { value = (k) => { const L = job.layers[job.layer[k]]; return L ? L.t1 - L.t0 : 0; }; unit = 's'; }
+    else if (mode === 'beadh') { value = (k) => job.beadH[k]; unit = 'mm'; }
+    else if (mode === 'beadw') { value = (k) => job.beadW[k]; unit = 'mm'; }
     colorRange = null;
     if (value) {
       const sample = []; const stride = Math.max(1, Math.floor(segs / 20000));
       for (let s = 0; s < segs; s += stride) sample.push(value(R.segMove[s]));
       let lo = percentile(sample, 0.01), hi = percentile(sample, 0.99);
+      if (mode === 'beadh') {
+        // thinned lines (scarf ramps, Z contouring) are a small share of a print: scale from 0 so they stand out
+        lo = 0; hi = Math.max(percentile(sample, 0.995), 0.05);
+      } else if (mode === 'beadw' && hi - lo < 0.02) {
+        const mid = percentile(sample, 0.5); lo = mid * 0.75; hi = mid * 1.25;
+      }
       if (hi - lo < 1e-6) { hi = lo + 1; }
       colorRange = { lo, hi, unit };
       for (let s = 0; s < segs; s++) {
@@ -327,8 +390,9 @@
       html = '<h4>Filament</h4>' + [...used].sort((a, b) => a - b).map(t =>
         '<div class="row"><span class="sw" style="background:' + (filColors[t] || '#9aa3ab') + '"></span>Filament ' + (t + 1) + '</div>').join('');
     } else if (colorRange) {
-      const title = { speed: 'Actual speed (peak)', fcmd: 'Set speed', flow: 'Volumetric flow', layertime: 'Layer time' }[mode];
-      const f = (v) => (v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ' + colorRange.unit;
+      const title = { speed: 'Actual speed (peak)', fcmd: 'Set speed', flow: 'Volumetric flow', layertime: 'Layer time',
+                      beadh: 'Line height', beadw: 'Line width' }[mode];
+      const f = (v) => (colorRange.unit === 'mm' ? v.toFixed(2) : v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ' + colorRange.unit;
       html = '<h4>' + title + '</h4><div class="grad" style="background:linear-gradient(90deg,' + RANGE.join(',') + ')"></div>' +
              '<div class="ends"><span>' + f(colorRange.lo) + '</span><span>' + f(colorRange.hi) + '</span></div>';
     }
@@ -361,8 +425,8 @@
     disposeObj(R.layerObj); R.layerObj = null; R.layerObjLayer = layerIdx;
     const L = job.layers[layerIdx]; if (!L) return;
     const a = R.extPrefix[L.first], b = R.extPrefix[layerIdx + 1 < job.layers.length ? job.layers[layerIdx + 1].first : job.moves];
-    const pos = R.pos.slice(a * 6, b * 6), col = R.col.slice(a * 6, b * 6);
-    R.layerObj = makeLines(pos, col, 0); R.layerObj.userData.base = a;
+    const pos = R.pos.slice(a * 6, b * 6), col = R.col.slice(a * 6, b * 6), bead = R.bead.slice(a * 2, Math.max(a + 1, b) * 2);
+    R.layerObj = makeLines(pos, col, 0, bead); R.layerObj.userData.base = a;
     bedGroup.add(R.layerObj);
   }
 
@@ -387,12 +451,18 @@
     // the segment being extruded right now, drawn up to the nozzle
     if ((F[nz.k] & C.FL_EXTRUDE) && nz.frac > 0) {
       const P = job.pts, a = nz.k * 3, s = done;
-      const p = new Float32Array([P[a], P[a + 1], P[a + 2], nz.x, nz.y, nz.z]);
+      const thin = R.partial.userData.thin;
+      const dz = thin ? 0 : R.pos[s * 6 + 2] - P[a + 2];      // same bead offset as the finished line
+      const p = new Float32Array([P[a], P[a + 1], P[a + 2] + dz, nz.x, nz.y, nz.z + dz]);
       const c = R.col.slice(s * 6, s * 6 + 6);
-      if (R.partial.userData.thin) {
+      if (thin) {
         R.partial.geometry.attributes.position.array.set(p); R.partial.geometry.attributes.position.needsUpdate = true;
         R.partial.geometry.attributes.color.array.set(c); R.partial.geometry.attributes.color.needsUpdate = true;
-      } else { R.partial.geometry.setPositions(p); R.partial.geometry.setColors(c); }
+      } else {
+        R.partial.geometry.setPositions(p); R.partial.geometry.setColors(c);
+        const bd = R.partial.geometry.attributes.instanceBead;
+        bd.array[0] = R.bead[s * 2]; bd.array[1] = R.bead[s * 2 + 1]; bd.needsUpdate = true;
+      }
       R.partial.visible = true;
     } else R.partial.visible = false;
 
@@ -452,6 +522,7 @@
     const filArea = Math.PI * Math.pow(job.machine.filamentDiameter / 2, 2);
     const flow = (F & C.FL_EXTRUDE) && job.len[k] > 0 ? nz.v * job.de[k] / job.len[k] * filArea : 0;
     $('hFlow').textContent = (F & C.FL_EXTRUDE) ? flow.toFixed(1) + ' mm³/s' : '–';
+    $('hBead').textContent = (F & C.FL_EXTRUDE) && job.beadW[k] > 0 ? job.beadW[k].toFixed(2) + ' × ' + job.beadH[k].toFixed(2) + ' mm' : '–';
     $('hAcc').textContent = (F & C.FL_DWELL) ? '–' : Math.round(job.ac[k]) + ' mm/s²';
     const fc = String(job.config.filament_colour || '').split(/[;,]/)[job.tool[k]];
     $('hTool').innerHTML = (fc ? '<span class="dot" style="background:' + fc.trim() + '"></span>' : '') + (job.tool[k] + 1);
@@ -813,7 +884,7 @@
   }
   $('colorSel').onchange = () => { prefs.color = $('colorSel').value; savePrefs(); recolor(); };
   $('motionSel').onchange = () => { prefs.motion = $('motionSel').value; savePrefs(); updateScene(true); };
-  $('lineSel').onchange = () => { prefs.lines = $('lineSel').value; savePrefs(); if (job) { rebuildObjects(); updateScene(true); } };
+  $('lineSel').onchange = () => { prefs.lines = $('lineSel').value; savePrefs(); if (job) { buildPaths(); updateScene(true); } };
   $('timingSel').onchange = () => {
     prefs.timing = $('timingSel').value; savePrefs();
     if (!job) return;
@@ -941,7 +1012,7 @@
       (meta.when ? ' · ' + meta.when : '');
     $('layerIn').max = job.layers.length - so;
     describeTiming();
-    if (R.segMove.length > 1200000 && prefs.lines === 'fat')
+    if (R.segMove.length > 1200000 && prefs.lines !== 'thin')
       setTimeout(() => toast('Large print (' + Math.round(R.segMove.length / 1e5) / 10 + 'M lines). If playback stutters, use Options → Line style → Thin lines.'), 400);
     simT = meta.keepFrac != null ? meta.keepFrac * job.total : meta.keepTime != null ? Math.min(meta.keepTime, job.total) : 0;
     if (!meta.keepView) frame('iso');
@@ -1115,6 +1186,8 @@
   send({ cmd: 'hello' });
   // test hook: standalone page can be driven from the console / a harness
   window.PlaybackApp = { loadText, seek, setPlaying, get job() { return job; }, get time() { return simT; },
-                         setPrefs(p) { Object.assign(prefs, p); syncOptionUI(); if (job) { rebuildObjects(); computeColors(); if (R.main.userData.thin) R.main.geometry.attributes.color.needsUpdate = true; else R.main.geometry.setColors(R.col); updateScene(true); updateHud(); } },
-                         frame, onHostMessage };
+                         setPrefs(p) { Object.assign(prefs, p); syncOptionUI(); if (job) { if ("lines" in p) buildPaths(); else rebuildObjects(); computeColors(); if (R.main.userData.thin) R.main.geometry.attributes.color.needsUpdate = true; else R.main.geometry.setColors(R.col); updateScene(true); updateHud(); } },
+                         frame, onHostMessage,
+                         // tests: put the camera at (px,py,pz) looking at (tx,ty,tz), in bed millimetres
+                         look(tx, ty, tz, px, py, pz) { controls.target.set(tx, ty, tz); camera.position.set(px, py, pz); camera.updateProjectionMatrix(); controls.update(); dirty = true; } };
 })();

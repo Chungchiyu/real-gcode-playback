@@ -9,6 +9,7 @@ python3 gen_gcode.py marlin marlin.gcode
 python3 gen_flags.py
 node gen_big.js
 node gen_orca_timing.js
-echo "== core";        node unit.js; node core_test.js; node flags_test.js; node timing_test.js
-echo "== page";        python3 ui_test.py; python3 code_test.py; python3 center_test.py; python3 flags_ui.py; python3 speed_test.py; python3 blur_test.py
+node gen_bead.js
+echo "== core";        node unit.js; node core_test.js; node flags_test.js; node timing_test.js; node bead_test.js
+echo "== page";        python3 ui_test.py; python3 code_test.py; python3 center_test.py; python3 flags_ui.py; python3 speed_test.py; python3 blur_test.py; python3 bead_ui.py
 echo "== plugin";      python3 plugin_harness.py; python3 harness2.py

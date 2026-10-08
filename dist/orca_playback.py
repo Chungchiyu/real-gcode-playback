@@ -385,6 +385,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         <option value="speed">Actual speed</option>
         <option value="fcmd">Set speed</option>
         <option value="flow">Volumetric flow</option>
+        <option value="beadh">Line height</option>
+        <option value="beadw">Line width</option>
         <option value="layertime">Layer time</option>
         <option value="filament">Filament</option>
       </select></label>
@@ -408,6 +410,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         <tr><td>Line type</td><td id="hFeat">–</td></tr>
         <tr><td>Speed</td><td class="v"><span id="hSpeed">–</span> <span class="muted" id="hSpeedSet"></span></td></tr>
         <tr><td>Flow</td><td class="v" id="hFlow">–</td></tr>
+        <tr><td>Line</td><td class="v" id="hBead" title="Width × height of the line being printed, from the G-code">–</td></tr>
         <tr><td>Accel</td><td class="v" id="hAcc">–</td></tr>
         <tr><td>Filament</td><td id="hTool">–</td></tr>
         <tr><td>Remaining</td><td class="v" id="hRemain">–</td></tr>
@@ -470,7 +473,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         </select></label>
       <label>Line style
         <select id="lineSel">
-          <option value="fat">Real extrusion width</option>
+          <option value="fat">Actual cross-section (width × height from the G-code)</option>
+          <option value="uniform">Uniform width</option>
           <option value="thin">Thin lines (faster on huge prints)</option>
         </select></label>
       <label>Timing
@@ -545,6 +549,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
  *   Job.acc          Float32Array acceleration in force for the move (mm/s^2)
  *   Job.wait         Float32Array fixed duration for dwell pseudo-moves (s)
  *   Job.line         Uint32Array  1-based source line number
+ *   Job.hnom         Float32Array nominal line height from the slicer's HEIGHT tag in force (0 = none)
+ *   Job.beadW/beadH  Float32Array actual line width / height of each extrusion (mm), from the G-code
  *   Job.layers       [{z, h, first}]   first = first move index of the layer
  *   Job.events       [{move, kind, label}]
  *   Job.m73          [{move, p}]        Orca/Bambu progress markers (percent of time)
@@ -665,7 +671,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       flags: new Grow(Uint8Array, est), feat: new Grow(Uint8Array, est), layer: new Grow(Uint32Array, est),
       tool: new Grow(Uint8Array, est), fcmd: new Grow(Float32Array, est), len: new Grow(Float32Array, est),
       de: new Grow(Float32Array, est), acc: new Grow(Float32Array, est), wait: new Grow(Float32Array, est),
-      line: new Grow(Uint32Array, est),
+      line: new Grow(Uint32Array, est), hn: new Grow(Float32Array, est),
     };
     let n = 0;                                   // move count
     const config = {}; const layers = []; const events = []; const m73 = [];
@@ -676,7 +682,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     let ox = 0, oy = 0, oz = 0;                   // G92 offsets for xyz
     let absXYZ = true, absE = true, fmm = 3000 / 60; // feed in mm/s
     let accPrint = 0, accTravel = 0, accRetract = 0;  // filled from config after the scan
-    let curFeat = 0, curTool = 0, curLayer = 0;
+    let curFeat = 0, curTool = 0, curLayer = 0, curH = 0;
     // Slicer layer markers, when present, are the truth; otherwise layers are inferred from Z.
     let haveLayerComments = /^;\s*(LAYER_CHANGE|CHANGE_LAYER)\s*$/m.test(text.length > 4e6 ? text.substring(0, 4e6) : text);
     let lastExtrudeZ = -1e9, lastExtrudeMove = 0;
@@ -730,7 +736,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       G.flags.a[n] = flags; G.feat.a[n] = curFeat; G.layer.a[n] = curLayer < 0 ? 0 : curLayer;
       G.tool.a[n] = curTool; G.fcmd.a[n] = fcmd; G.len.a[n] = length; G.de.a[n] = dE;
       G.acc.a[n] = (flags & FL_EXTRUDE) ? accPrint : (flags & FL_EONLY) ? (accRetract || accPrint) : (accTravel || accPrint);
-      G.wait.a[n] = waitS; G.line.a[n] = lineNo;
+      G.wait.a[n] = waitS; G.line.a[n] = lineNo; G.hn.a[n] = curH;
       n++;
     }
     function startLayer(zv, hv) {
@@ -788,7 +794,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
           } else if ((m = /^(?:Z|Z_HEIGHT):\s*([\d.]+)/.exec(t))) {
             if (layers.length && haveLayerComments) layers[layers.length - 1].z = parseFloat(m[1]);
           } else if ((m = /^(?:HEIGHT|LAYER_HEIGHT):\s*([\d.]+)/.exec(t))) {
-            if (layers.length && haveLayerComments) layers[layers.length - 1].h = parseFloat(m[1]);
+            curH = parseFloat(m[1]) || 0;
+            if (layers.length && haveLayerComments) layers[layers.length - 1].h = curH;
           } else if ((m = /^estimated printing time \((normal|silent) mode\)\s*[=:]\s*(.+)$/i.exec(t))) {
             const d = parseDuration(m[2]);
             if (m[1].toLowerCase() === 'normal') { if (d) estimate = d; } else estimateSilent = d;
@@ -989,7 +996,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       moves: n, pts: P.out((n + 1) * 3),
       flags: G.flags.out(n), feat: G.feat.out(n), layer: G.layer.out(n), tool: G.tool.out(n),
       fcmd: G.fcmd.out(n), len: G.len.out(n), de: G.de.out(n), acc: G.acc.out(n), wait: G.wait.out(n),
-      line: G.line.out(n), layers, events, m73, config, estimate, estimateSilent, lines: lineNo,
+      line: G.line.out(n), hnom: G.hn.out(n), layers, events, m73, config, estimate, estimateSilent, lines: lineNo,
     };
     // drop empty layers produced by consecutive markers
     job.machine = resolveMachine(config, machineCmd);
@@ -1004,7 +1011,81 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     job.flagsFound = Object.values(flagsFound);
     job.skippedMoves = skippedMoves;
     job.bed = resolveBed(job);
+    computeBeads(job);
     return job;
+  }
+
+  /* ---------------------------------------------------------------- line cross-section
+     What each extrusion actually lays down, from the G-code alone. The cross-section area is exact:
+     A = filament fed × filament area ÷ path length. The line height is the gap between the nozzle
+     and the surface below: the slicer's nominal height (HEIGHT tag) plus how far this move sits above
+     or below the layer's Z. That is what Z contouring (z = layer Z + z_diff, E × (h + z_diff) / h) and
+     scarf seams (Z and E ramping up together) change. The width then follows from OrcaSlicer's own
+     rounded-rectangle model, A = h × (w − h × (1 − π/4)), so normal lines come out at the slicer's
+     line width and ramps keep their width while getting thinner. */
+  const BEAD_K = 1 - Math.PI / 4;
+  function computeBeads(job) {
+    const n = job.moves, F = job.flags, P = job.pts, L = job.layers, m = job.machine;
+    const fa = Math.PI * Math.pow((m.filamentDiameter || 1.75) / 2, 2);
+    const noz = m.nozzle || 0.4;
+    const spiral = /^(1|true)$/i.test(String(first(job.config.spiral_mode, 0)));
+    const W = new Float32Array(n), H = new Float32Array(n);
+    const isExt = (k) => (F[k] & FL_EXTRUDE) && !(F[k] & FL_SKIP) && job.len[k] > 0 && job.de[k] > 0;
+    const nominal = (k) => {
+      const li = job.layer[k], lay = L[li] || L[0];
+      let hn = job.hnom[k] || lay.h;
+      if (!(hn > 0)) {
+        const prev = li > 0 ? L[li - 1] : null;
+        hn = prev && lay.z > prev.z ? lay.z - prev.z : (lay.z > 0 && lay.z < noz ? lay.z : noz / 2);
+      }
+      return hn;
+    };
+    const near = noz * 0.3, CELL = 1;
+    for (let li = 0; li < L.length; li++) {
+      const a = L[li].first, b = li + 1 < L.length ? L[li + 1].first : n;
+      const lay = L[li], useZ = !spiral && lay.z > 0;
+      // segments laid below the layer's Z (scarf starts, Z-contoured lines), hashed by position:
+      // a later line on top of one of them (the scarf's closing overlap) rests on it, not on the layer below
+      let grid = null;
+      for (let k = a; k < b; k++) {
+        if (!isExt(k)) continue;
+        const hn = nominal(k);
+        let base = useZ ? lay.z - hn : null;
+        // OrcaSlicer sizes each line's flow from its end point (z and ratios at line.b), so do the same
+        const zm = P[k * 3 + 5];
+        if (grid && useZ) {
+          const mx = P[k * 3 + 3], my = P[k * 3 + 4];
+          const cx = Math.floor(mx / CELL), cy = Math.floor(my / CELL);
+          for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+            const list = grid.get(gx * 65536 + gy); if (!list) continue;
+            for (const j of list) {
+              const ax = P[j * 3], ay = P[j * 3 + 1], bx = P[j * 3 + 3], by = P[j * 3 + 4];
+              const dx = bx - ax, dy = by - ay, d2 = dx * dx + dy * dy;
+              const t = d2 > 0 ? Math.min(1, Math.max(0, ((mx - ax) * dx + (my - ay) * dy) / d2)) : 0;
+              const ex = ax + dx * t - mx, ey = ay + dy * t - my;
+              if (ex * ex + ey * ey > near * near) continue;
+              const top = P[j * 3 + 2] + (P[j * 3 + 5] - P[j * 3 + 2]) * t;
+              if (top < zm - 0.005 && top > base) base = top;
+            }
+          }
+        }
+        let h = useZ ? zm - base : hn;
+        h = Math.min(Math.max(h, 0.005), hn * 1.5, noz * 1.5);
+        const A = job.de[k] * fa / job.len[k];
+        W[k] = Math.min(Math.max(A / h + h * BEAD_K, 0.05), noz * 3);
+        H[k] = h;
+        if (useZ && zm < lay.z - 0.01) {
+          if (!grid) grid = new Map();
+          const x0 = Math.floor(Math.min(P[k * 3], P[k * 3 + 3]) / CELL), x1 = Math.floor(Math.max(P[k * 3], P[k * 3 + 3]) / CELL);
+          const y0 = Math.floor(Math.min(P[k * 3 + 1], P[k * 3 + 4]) / CELL), y1 = Math.floor(Math.max(P[k * 3 + 1], P[k * 3 + 4]) / CELL);
+          if ((x1 - x0 + 1) * (y1 - y0 + 1) <= 64)
+            for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
+              const key = gx * 65536 + gy; let list = grid.get(key); if (!list) grid.set(key, list = []); list.push(k);
+            }
+        }
+      }
+    }
+    job.beadW = W; job.beadH = H;
   }
 
   /* ---------------------------------------------------------------- machine & bed */
@@ -1310,7 +1391,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     return { frac: Math.max(0, Math.min(1, s / L)), v: Math.max(0, v) };
   }
 
-  const api = { parseGcode, planJob, applyTiming, moveAt, stateIn, FEATURES, featureId, parseDuration,
+  const api = { parseGcode, planJob, computeBeads, applyTiming, moveAt, stateIn, FEATURES, featureId, parseDuration,
                 FL_EXTRUDE, FL_TRAVEL, FL_EONLY, FL_DWELL, FL_ARC, FL_STOP, FL_SKIP, FLAG_INFO, flagLabel };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PlaybackCore = api;
@@ -1466,7 +1547,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   let lineMat = null, lineMatPartial = null, thinMat = null;
   function lineWidth() { return Math.max(0.2, (job && job.machine.nozzle) ? job.machine.nozzle * 1.05 : 0.42); }
 
-  function makeLines(pos, col, count) {
+  function makeLines(pos, col, count, bead) {
     if (prefs.lines === 'thin') {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -1477,6 +1558,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     }
     const g = new THREE.LineSegmentsGeometry();
     g.setPositions(pos); g.setColors(col);
+    g.setAttribute('instanceBead', new THREE.InstancedBufferAttribute(bead, 2));
     g.instanceCount = count;
     const o = new THREE.LineSegments2(g, lineMat); o.frustumCulled = false;
     return o;
@@ -1492,16 +1574,57 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
      (WORLD_UNITS mode). That is exactly a cylinder: turn the distance into a surface normal and
      light it, so extrusions read as round beads instead of flat ribbons. */
   const shadeUniform = { value: 1 };
+  /* Each segment carries its own cross-section (instanceBead = width, height in mm): the bead is an
+     ellipse-ish tube, wide across and as tall as the line really is. The quad is sized by the
+     ellipse's extent across the view, and the fragment test and the lighting normal use the same
+     ellipse, so scarf ramps and Z-contoured lines show their real thickness from the side. */
+  const BEAD_VS_PARS = `
+    attribute vec2 instanceBead;
+    varying vec2 vBead;
+    varying vec3 vUp;
+    varying vec3 vSide;
+    float beadRadius( vec3 dir ) {
+      float a = 0.5 * vBead.x * dot( dir, vSide ), b = 0.5 * vBead.y * dot( dir, vUp );
+      return max( sqrt( a * a + b * b ), 1e-4 );
+    }`;
+  const BEAD_FS_PARS = `
+    varying vec2 vBead;
+    varying vec3 vUp;
+    varying vec3 vSide;
+    float beadRadius( vec3 dir ) {
+      float a = 0.5 * vBead.x * dot( dir, vSide ), b = 0.5 * vBead.y * dot( dir, vUp );
+      return max( sqrt( a * a + b * b ), 1e-4 );
+    }`;
   function shadedLineMaterial() {
     const m = new THREE.LineMaterial({ vertexColors: true, worldUnits: true, linewidth: 0.42 });
     m.onBeforeCompile = (shader) => {
       shader.uniforms.shadeMode = shadeUniform;
+      const vs = shader.vertexShader;
+      shader.vertexShader = vs
+        .replace('attribute vec3 instanceEnd;', 'attribute vec3 instanceEnd;' + BEAD_VS_PARS)
+        .replace('if ( position.x < 0.0 ) offset *= - 1.0;\n\n\t\t\t\tfloat forwardOffset', `if ( position.x < 0.0 ) offset *= - 1.0;
+          vBead = instanceBead;
+          vUp = normalize( ( modelViewMatrix * vec4( 0.0, 0.0, 1.0, 0.0 ) ).xyz );
+          vSide = cross( vUp, worldDir );
+          vSide = length( vSide ) > 1e-4 ? normalize( vSide ) : normalize( cross( worldDir, vec3( 1.0, 0.0, 0.0 ) ) );
+          float beadR = beadRadius( offset );
+          float beadCap = 0.5 * vBead.x;
+
+\t\t\t\tfloat forwardOffset`)
+        .replace('start.xyz += - worldDir * linewidth * 0.5;', 'start.xyz += - worldDir * beadCap;')
+        .replace('end.xyz += worldDir * linewidth * 0.5;', 'end.xyz += worldDir * beadCap;')
+        .replace('offset *= linewidth * 0.5;', 'offset *= beadR;');
+      if (shader.vertexShader.indexOf('offset *= beadR;') < 0 || shader.vertexShader.indexOf('float beadR') < 0)
+        console.warn('Playback: line shader layout changed; per-line widths are off');
       shader.fragmentShader = shader.fragmentShader
-        .replace('uniform float opacity;', 'uniform float opacity;\nuniform float shadeMode;')
+        .replace('uniform float opacity;', 'uniform float opacity;\nuniform float shadeMode;' + BEAD_FS_PARS)
+        .replace('float norm = len / linewidth;', `vec3 beadDir = len > 1e-6 ? delta / len : vSide;
+				float beadRs = beadRadius( beadDir );
+				float norm = len / ( 2.0 * beadRs );`)
         .replace('#include <color_fragment>', `#include <color_fragment>
         #ifdef WORLD_UNITS
           if ( shadeMode > 0.5 ) {
-            float r = linewidth * 0.5;
+            float r = beadRs;
             float s = clamp( len / r, 0.0, 1.0 );
             vec3 ld = normalize( lineDir );
             vec3 toCam = -normalize( p2 );
@@ -1509,6 +1632,10 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
             c = length( c ) > 1e-5 ? normalize( c ) : toCam;
             vec3 side = len > 1e-6 ? -delta / len : vec3( 0.0 );
             vec3 N = normalize( side * s + c * sqrt( max( 0.0, 1.0 - s * s ) ) );
+            // round tube -> elliptical bead: normals scale by the inverse of the half-axes
+            float ns = dot( N, vSide ), nu = dot( N, vUp );
+            float ra = max( 0.5 * vBead.x, 1e-3 ), rb = max( 0.5 * vBead.y, 1e-3 ), rm = max( ra, rb );
+            N = normalize( ( N - ns * vSide - nu * vUp ) + vSide * ( ns * rm / ra ) + vUp * ( nu * rm / rb ) );
             vec3 L = normalize( vec3( -0.35, 0.6, 0.72 ) );
             float diff = max( dot( N, L ), 0.0 );
             float spec = pow( max( dot( N, normalize( L + toCam ) ), 0.0 ), 36.0 ) * 0.22;
@@ -1534,6 +1661,10 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     for (let k = 0; k < n; k++) { if (F[k] & C.FL_SKIP) continue; if (F[k] & C.FL_EXTRUDE) segs++; else if (F[k] & C.FL_TRAVEL) travels++; }
     const segMove = new Uint32Array(segs), extPrefix = new Uint32Array(n + 1), travelPrefix = new Uint32Array(n + 1);
     const pos = new Float32Array(segs * 6), tpos = new Float32Array(Math.max(1, travels) * 6);
+    const bead = new Float32Array(Math.max(1, segs) * 2);
+    // "Actual cross-section": each line as wide and tall as the G-code makes it, its centre half its
+    // height below the nozzle (where the plastic is). "Uniform": one width, centred on the path.
+    const real = prefs.lines !== 'uniform', lw = lineWidth();
     let s = 0, tr = 0;
     for (let k = 0; k < n; k++) {
       extPrefix[k] = s; travelPrefix[k] = tr;
@@ -1541,6 +1672,10 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       if (F[k] & C.FL_EXTRUDE) {
         segMove[s] = k;
         pos.set(P.subarray(k * 3, k * 3 + 6), s * 6);
+        if (real && job.beadW[k] > 0) {
+          bead[s * 2] = job.beadW[k]; bead[s * 2 + 1] = job.beadH[k];
+          pos[s * 6 + 2] -= job.beadH[k] / 2; pos[s * 6 + 5] -= job.beadH[k] / 2;
+        } else { bead[s * 2] = lw; bead[s * 2 + 1] = lw; }
         s++;
       } else if (F[k] & C.FL_TRAVEL) {
         tpos.set(P.subarray(k * 3, k * 3 + 6), tr * 6);
@@ -1548,7 +1683,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       }
     }
     extPrefix[n] = s; travelPrefix[n] = tr;
-    R.segMove = segMove; R.extPrefix = extPrefix; R.travelPrefix = travelPrefix; R.pos = pos;
+    R.segMove = segMove; R.extPrefix = extPrefix; R.travelPrefix = travelPrefix; R.pos = pos; R.bead = bead;
     R.col = new Float32Array(segs * 6);
     computeColors();
     rebuildObjects();
@@ -1563,10 +1698,11 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   function rebuildObjects() {
     ensureMaterials();
     disposeObj(R.main); disposeObj(R.layerObj); disposeObj(R.partial);
-    R.main = makeLines(R.pos, R.col, 0); bedGroup.add(R.main);
+    R.main = makeLines(R.pos, R.col, 0, R.bead); bedGroup.add(R.main);
     R.layerObj = null; R.layerObjLayer = -1;
     const pg = new THREE.LineSegmentsGeometry();
     pg.setPositions(new Float32Array(6)); pg.setColors(new Float32Array(6));
+    pg.setAttribute('instanceBead', new THREE.InstancedBufferAttribute(new Float32Array(2), 2));
     R.partial = prefs.lines === 'thin'
       ? (() => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
                  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(6), 3)); const o = new THREE.LineSegments(g, thinMat); o.userData.thin = true; o.frustumCulled = false; return o; })()
@@ -1591,11 +1727,19 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     else if (mode === 'fcmd') { value = (k) => job.fcmd[k]; unit = 'mm/s'; }
     else if (mode === 'flow') { value = (k) => job.plannerDur[k] > 0 ? job.de[k] * filArea / job.plannerDur[k] : 0; unit = 'mm³/s'; }
     else if (mode === 'layertime') { value = (k) => { const L = job.layers[job.layer[k]]; return L ? L.t1 - L.t0 : 0; }; unit = 's'; }
+    else if (mode === 'beadh') { value = (k) => job.beadH[k]; unit = 'mm'; }
+    else if (mode === 'beadw') { value = (k) => job.beadW[k]; unit = 'mm'; }
     colorRange = null;
     if (value) {
       const sample = []; const stride = Math.max(1, Math.floor(segs / 20000));
       for (let s = 0; s < segs; s += stride) sample.push(value(R.segMove[s]));
       let lo = percentile(sample, 0.01), hi = percentile(sample, 0.99);
+      if (mode === 'beadh') {
+        // thinned lines (scarf ramps, Z contouring) are a small share of a print: scale from 0 so they stand out
+        lo = 0; hi = Math.max(percentile(sample, 0.995), 0.05);
+      } else if (mode === 'beadw' && hi - lo < 0.02) {
+        const mid = percentile(sample, 0.5); lo = mid * 0.75; hi = mid * 1.25;
+      }
       if (hi - lo < 1e-6) { hi = lo + 1; }
       colorRange = { lo, hi, unit };
       for (let s = 0; s < segs; s++) {
@@ -1645,8 +1789,9 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       html = '<h4>Filament</h4>' + [...used].sort((a, b) => a - b).map(t =>
         '<div class="row"><span class="sw" style="background:' + (filColors[t] || '#9aa3ab') + '"></span>Filament ' + (t + 1) + '</div>').join('');
     } else if (colorRange) {
-      const title = { speed: 'Actual speed (peak)', fcmd: 'Set speed', flow: 'Volumetric flow', layertime: 'Layer time' }[mode];
-      const f = (v) => (v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ' + colorRange.unit;
+      const title = { speed: 'Actual speed (peak)', fcmd: 'Set speed', flow: 'Volumetric flow', layertime: 'Layer time',
+                      beadh: 'Line height', beadw: 'Line width' }[mode];
+      const f = (v) => (colorRange.unit === 'mm' ? v.toFixed(2) : v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ' + colorRange.unit;
       html = '<h4>' + title + '</h4><div class="grad" style="background:linear-gradient(90deg,' + RANGE.join(',') + ')"></div>' +
              '<div class="ends"><span>' + f(colorRange.lo) + '</span><span>' + f(colorRange.hi) + '</span></div>';
     }
@@ -1679,8 +1824,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     disposeObj(R.layerObj); R.layerObj = null; R.layerObjLayer = layerIdx;
     const L = job.layers[layerIdx]; if (!L) return;
     const a = R.extPrefix[L.first], b = R.extPrefix[layerIdx + 1 < job.layers.length ? job.layers[layerIdx + 1].first : job.moves];
-    const pos = R.pos.slice(a * 6, b * 6), col = R.col.slice(a * 6, b * 6);
-    R.layerObj = makeLines(pos, col, 0); R.layerObj.userData.base = a;
+    const pos = R.pos.slice(a * 6, b * 6), col = R.col.slice(a * 6, b * 6), bead = R.bead.slice(a * 2, Math.max(a + 1, b) * 2);
+    R.layerObj = makeLines(pos, col, 0, bead); R.layerObj.userData.base = a;
     bedGroup.add(R.layerObj);
   }
 
@@ -1705,12 +1850,18 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     // the segment being extruded right now, drawn up to the nozzle
     if ((F[nz.k] & C.FL_EXTRUDE) && nz.frac > 0) {
       const P = job.pts, a = nz.k * 3, s = done;
-      const p = new Float32Array([P[a], P[a + 1], P[a + 2], nz.x, nz.y, nz.z]);
+      const thin = R.partial.userData.thin;
+      const dz = thin ? 0 : R.pos[s * 6 + 2] - P[a + 2];      // same bead offset as the finished line
+      const p = new Float32Array([P[a], P[a + 1], P[a + 2] + dz, nz.x, nz.y, nz.z + dz]);
       const c = R.col.slice(s * 6, s * 6 + 6);
-      if (R.partial.userData.thin) {
+      if (thin) {
         R.partial.geometry.attributes.position.array.set(p); R.partial.geometry.attributes.position.needsUpdate = true;
         R.partial.geometry.attributes.color.array.set(c); R.partial.geometry.attributes.color.needsUpdate = true;
-      } else { R.partial.geometry.setPositions(p); R.partial.geometry.setColors(c); }
+      } else {
+        R.partial.geometry.setPositions(p); R.partial.geometry.setColors(c);
+        const bd = R.partial.geometry.attributes.instanceBead;
+        bd.array[0] = R.bead[s * 2]; bd.array[1] = R.bead[s * 2 + 1]; bd.needsUpdate = true;
+      }
       R.partial.visible = true;
     } else R.partial.visible = false;
 
@@ -1770,6 +1921,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     const filArea = Math.PI * Math.pow(job.machine.filamentDiameter / 2, 2);
     const flow = (F & C.FL_EXTRUDE) && job.len[k] > 0 ? nz.v * job.de[k] / job.len[k] * filArea : 0;
     $('hFlow').textContent = (F & C.FL_EXTRUDE) ? flow.toFixed(1) + ' mm³/s' : '–';
+    $('hBead').textContent = (F & C.FL_EXTRUDE) && job.beadW[k] > 0 ? job.beadW[k].toFixed(2) + ' × ' + job.beadH[k].toFixed(2) + ' mm' : '–';
     $('hAcc').textContent = (F & C.FL_DWELL) ? '–' : Math.round(job.ac[k]) + ' mm/s²';
     const fc = String(job.config.filament_colour || '').split(/[;,]/)[job.tool[k]];
     $('hTool').innerHTML = (fc ? '<span class="dot" style="background:' + fc.trim() + '"></span>' : '') + (job.tool[k] + 1);
@@ -2131,7 +2283,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   }
   $('colorSel').onchange = () => { prefs.color = $('colorSel').value; savePrefs(); recolor(); };
   $('motionSel').onchange = () => { prefs.motion = $('motionSel').value; savePrefs(); updateScene(true); };
-  $('lineSel').onchange = () => { prefs.lines = $('lineSel').value; savePrefs(); if (job) { rebuildObjects(); updateScene(true); } };
+  $('lineSel').onchange = () => { prefs.lines = $('lineSel').value; savePrefs(); if (job) { buildPaths(); updateScene(true); } };
   $('timingSel').onchange = () => {
     prefs.timing = $('timingSel').value; savePrefs();
     if (!job) return;
@@ -2259,7 +2411,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       (meta.when ? ' · ' + meta.when : '');
     $('layerIn').max = job.layers.length - so;
     describeTiming();
-    if (R.segMove.length > 1200000 && prefs.lines === 'fat')
+    if (R.segMove.length > 1200000 && prefs.lines !== 'thin')
       setTimeout(() => toast('Large print (' + Math.round(R.segMove.length / 1e5) / 10 + 'M lines). If playback stutters, use Options → Line style → Thin lines.'), 400);
     simT = meta.keepFrac != null ? meta.keepFrac * job.total : meta.keepTime != null ? Math.min(meta.keepTime, job.total) : 0;
     if (!meta.keepView) frame('iso');
@@ -2433,8 +2585,10 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   send({ cmd: 'hello' });
   // test hook: standalone page can be driven from the console / a harness
   window.PlaybackApp = { loadText, seek, setPlaying, get job() { return job; }, get time() { return simT; },
-                         setPrefs(p) { Object.assign(prefs, p); syncOptionUI(); if (job) { rebuildObjects(); computeColors(); if (R.main.userData.thin) R.main.geometry.attributes.color.needsUpdate = true; else R.main.geometry.setColors(R.col); updateScene(true); updateHud(); } },
-                         frame, onHostMessage };
+                         setPrefs(p) { Object.assign(prefs, p); syncOptionUI(); if (job) { if ("lines" in p) buildPaths(); else rebuildObjects(); computeColors(); if (R.main.userData.thin) R.main.geometry.attributes.color.needsUpdate = true; else R.main.geometry.setColors(R.col); updateScene(true); updateHud(); } },
+                         frame, onHostMessage,
+                         // tests: put the camera at (px,py,pz) looking at (tx,ty,tz), in bed millimetres
+                         look(tx, ty, tz, px, py, pz) { controls.target.set(tx, ty, tz); camera.position.set(px, py, pz); camera.updateProjectionMatrix(); controls.update(); dirty = true; } };
 })();
 </script>
 </body></html>

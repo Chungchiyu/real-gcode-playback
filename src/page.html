@@ -188,6 +188,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         <option value="speed">Actual speed</option>
         <option value="fcmd">Set speed</option>
         <option value="flow">Volumetric flow</option>
+        <option value="beadh">Line height</option>
+        <option value="beadw">Line width</option>
         <option value="layertime">Layer time</option>
         <option value="filament">Filament</option>
       </select></label>
@@ -211,6 +213,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         <tr><td>Line type</td><td id="hFeat">–</td></tr>
         <tr><td>Speed</td><td class="v"><span id="hSpeed">–</span> <span class="muted" id="hSpeedSet"></span></td></tr>
         <tr><td>Flow</td><td class="v" id="hFlow">–</td></tr>
+        <tr><td>Line</td><td class="v" id="hBead" title="Width × height of the line being printed, from the G-code">–</td></tr>
         <tr><td>Accel</td><td class="v" id="hAcc">–</td></tr>
         <tr><td>Filament</td><td id="hTool">–</td></tr>
         <tr><td>Remaining</td><td class="v" id="hRemain">–</td></tr>
@@ -273,7 +276,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         </select></label>
       <label>Line style
         <select id="lineSel">
-          <option value="fat">Real extrusion width</option>
+          <option value="fat">Actual cross-section (width × height from the G-code)</option>
+          <option value="uniform">Uniform width</option>
           <option value="thin">Thin lines (faster on huge prints)</option>
         </select></label>
       <label>Timing
