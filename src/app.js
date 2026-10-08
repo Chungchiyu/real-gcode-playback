@@ -8,7 +8,7 @@
 
   /* ------------------------------------------------------------------ preferences */
   const DEFAULT_PREFS = { speed: 10, color: 'feature', travel: false, layerOnly: false, follow: false,
-                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube', flags: {} };
+                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube', flags: {}, pauseOnLeave: true };
   let prefs = Object.assign({}, DEFAULT_PREFS);
   try { Object.assign(prefs, JSON.parse(localStorage.getItem('orca-playback-prefs') || '{}')); } catch (e) { /* storage may be off */ }
   let prefTimer = 0;
@@ -700,13 +700,32 @@
   $('bPrevL').onclick = () => stepLayer(-1);
   $('bNextL').onclick = () => stepLayer(1);
   $('layerIn').addEventListener('change', () => gotoLayer(parseInt($('layerIn').value, 10) || 1));
-  $('speedSel').value = String(prefs.speed);
-  $('speedSel').onchange = () => { prefs.speed = parseFloat($('speedSel').value); savePrefs(); };
+  /* Playback speed: presets, or any multiplier typed into the custom box (0.01× – 10000×). */
+  const presetSpeeds = () => [...$('speedSel').options].map(o => parseFloat(o.value)).filter(v => isFinite(v));
+  const fmtSpeed = (v) => (Math.round(v * 1000) / 1000) + '×';
+  function showSpeed() {
+    const isPreset = presetSpeeds().some(v => Math.abs(v - prefs.speed) < 1e-9);
+    $('speedSel').value = isPreset ? String(presetSpeeds().find(v => Math.abs(v - prefs.speed) < 1e-9)) : 'custom';
+    $('speedCustomWrap').hidden = isPreset;
+    if (!isPreset && document.activeElement !== $('speedCustom')) $('speedCustom').value = prefs.speed;
+  }
+  function setSpeed(v, announce) {
+    if (!isFinite(v) || v <= 0) return;
+    prefs.speed = Math.min(10000, Math.max(0.01, v)); savePrefs(); showSpeed();
+    if (announce) toast('Playback ' + fmtSpeed(prefs.speed));
+  }
+  $('speedSel').onchange = () => {
+    if ($('speedSel').value === 'custom') {
+      $('speedCustomWrap').hidden = false; $('speedCustom').value = prefs.speed; $('speedCustom').focus(); $('speedCustom').select();
+    } else setSpeed(parseFloat($('speedSel').value));
+  };
+  $('speedCustom').addEventListener('change', () => setSpeed(parseFloat($('speedCustom').value)));
+  $('speedCustom').addEventListener('keydown', (e) => { if (e.key === 'Enter') { setSpeed(parseFloat($('speedCustom').value)); $('speedCustom').blur(); } });
   function bumpSpeed(dir) {
-    const opts = [...$('speedSel').options].map(o => parseFloat(o.value));
-    let i = opts.indexOf(prefs.speed); if (i < 0) i = 3;
-    i = Math.max(0, Math.min(opts.length - 1, i + dir)); prefs.speed = opts[i]; $('speedSel').value = String(opts[i]); savePrefs();
-    toast('Playback ' + opts[i] + '×');
+    // the next preset above (or below) the current speed, custom values included
+    const opts = presetSpeeds().sort((p, q) => p - q);
+    const next = dir > 0 ? opts.find(v => v > prefs.speed + 1e-9) : [...opts].reverse().find(v => v < prefs.speed - 1e-9);
+    if (next != null) setSpeed(next, true);
   }
 
   document.addEventListener('keydown', (e) => {
@@ -735,7 +754,8 @@
     $('tTravel').classList.toggle('on', prefs.travel); $('tLayer').classList.toggle('on', prefs.layerOnly);
     $('tFollow').classList.toggle('on', prefs.follow);
     $('colorSel').value = prefs.color; $('motionSel').value = prefs.motion; $('lineSel').value = prefs.lines;
-    $('timingSel').value = prefs.timing; $('speedSel').value = String(prefs.speed);
+    $('timingSel').value = prefs.timing; showSpeed();
+    $('pauseLeaveChk').checked = prefs.pauseOnLeave !== false;
     $('headChk').checked = prefs.head !== false; $('gantryChk').checked = prefs.gantry !== false;
     $('shadeSel').value = prefs.shade || 'tube';
     headGroup.visible = prefs.head !== false; gantry.visible = prefs.gantry !== false;
@@ -778,6 +798,7 @@
     if (job) toast('Print time ' + (job.total < before ? '−' : '+') + fmtLong(Math.abs(job.total - before)) + ' → ' + fmtLong(job.total));
     if (wasPlaying) setPlaying(true);
   }
+  $('pauseLeaveChk').onchange = () => { prefs.pauseOnLeave = $('pauseLeaveChk').checked; savePrefs(); };
   $('headChk').onchange = () => { prefs.head = $('headChk').checked; headGroup.visible = prefs.head; savePrefs(); dirty = true; };
   $('gantryChk').onchange = () => { prefs.gantry = $('gantryChk').checked; gantry.visible = prefs.gantry; savePrefs(); dirty = true; };
   $('shadeSel').onchange = () => { prefs.shade = $('shadeSel').value; savePrefs(); recolor(); };
@@ -846,14 +867,22 @@
      visibilitychange; as a second signal, a long gap between animation frames means the view was
      not being drawn (hidden), which is treated the same way. */
   let lastLoop = 0;
-  function onLeave() { if (playing) setPlaying(false); }
+  function onLeave() { if (playing && prefs.pauseOnLeave !== false) setPlaying(false); }
   function onReturn() { send({ cmd: 'check_latest' }); }
   document.addEventListener('visibilitychange', () => { if (document.hidden) onLeave(); else onReturn(); });
   window.addEventListener('pagehide', onLeave);
 
   function loop(now) {
     requestAnimationFrame(loop);
-    if (lastLoop && now - lastLoop > 1500) { onLeave(); onReturn(); }
+    if (lastLoop && now - lastLoop > 1500) {
+      // the view was hidden (no frames were drawn). If playback keeps going while away, catch the
+      // clock up by the time spent away so the print has progressed when you come back.
+      if (playing && prefs.pauseOnLeave === false && job) {
+        simT = Math.min(job.total, simT + (now - lastLoop) / 1000 * prefs.speed);
+        lastFrame = now; updateScene(true); updateHud();
+      }
+      onLeave(); onReturn();
+    }
     lastLoop = now;
     if (codeOpen && job && playing) {
       const cur = job.line[curMove];

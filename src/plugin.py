@@ -53,7 +53,7 @@ CHUNK_CHARS = 384 * 1024            # per message; each is one RunScript call in
 CAPTURE_NAME = "Playback capture"
 
 DEFAULT_PREFS = {"speed": 10, "color": "feature", "travel": False, "layerOnly": False, "follow": False,
-                 "motion": "auto", "lines": "fat", "timing": "aligned", "head": True, "gantry": True, "shade": "tube", "flags": {}}
+                 "motion": "auto", "lines": "fat", "timing": "aligned", "head": True, "gantry": True, "shade": "tube", "flags": {}, "pauseOnLeave": True}
 
 SETUP_HINT = {
     "title": "One-time setup for automatic loading",
@@ -212,7 +212,7 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
             for key, value in stored.items():
                 if key in DEFAULT_PREFS and isinstance(value, type(DEFAULT_PREFS[key])):
                     out[key] = value
-                elif key == "speed" and isinstance(value, (int, float)):
+                elif key == "speed" and isinstance(value, (int, float)) and not isinstance(value, bool):
                     out[key] = value
         return out
 

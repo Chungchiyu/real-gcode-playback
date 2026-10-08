@@ -5,12 +5,15 @@
 # name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
-# version = "1.3.0"
+# version = "1.4.0"
 # ///
 """Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
+1.4.0 (2026-10-09)
+  - Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)
+  - Option to keep playing when you leave the Playback tab
 1.3.0 (2026-10-09)
   - Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed
   - Bed leveling counts as 260 s, as in OrcaSlicer's estimate
@@ -76,7 +79,7 @@ CHUNK_CHARS = 384 * 1024            # per message; each is one RunScript call in
 CAPTURE_NAME = "Playback capture"
 
 DEFAULT_PREFS = {"speed": 10, "color": "feature", "travel": False, "layerOnly": False, "follow": False,
-                 "motion": "auto", "lines": "fat", "timing": "aligned", "head": True, "gantry": True, "shade": "tube", "flags": {}}
+                 "motion": "auto", "lines": "fat", "timing": "aligned", "head": True, "gantry": True, "shade": "tube", "flags": {}, "pauseOnLeave": True}
 
 SETUP_HINT = {
     "title": "One-time setup for automatic loading",
@@ -88,8 +91,16 @@ SETUP_HINT = {
 }
 
 CHANGELOG = {
- "version": "1.3.0",
+ "version": "1.4.0",
  "entries": [
+  {
+   "version": "1.4.0",
+   "date": "2026-10-09",
+   "changes": [
+    "Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)",
+    "Option to keep playing when you leave the Playback tab"
+   ]
+  },
   {
    "version": "1.3.0",
    "date": "2026-10-09",
@@ -315,6 +326,9 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
 #controls .time b { color: var(--fg); font-weight: 600; }
 #play { width: 40px; justify-content: center; }
 #layerIn { width: 66px; }
+#speedCustomWrap { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11.5px; }
+#speedCustomWrap[hidden] { display: none; }
+#speedCustom { width: 72px; }
 kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px; padding: 0 4px; }
 </style>
 </head>
@@ -441,6 +455,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       <div id="flagList" hidden></div>
       <label class="check"><input type="checkbox" id="headChk"> Show the hot end</label>
       <label class="check"><input type="checkbox" id="gantryChk"> Show the gantry</label>
+      <label class="check"><input type="checkbox" id="pauseLeaveChk"> Pause when leaving the Playback tab</label>
       <div class="about"><span id="verText">Playback</span> · <a href="#" id="logLink">What's new</a></div>
       <div id="changelog" hidden></div>
     </div>
@@ -452,10 +467,15 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       <div class="side left">
         <label class="inline">Speed
           <select id="speedSel" title="Playback speed (− / +)">
+            <option value="0.1">0.1×</option><option value="0.25">0.25×</option><option value="0.5">0.5×</option>
             <option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option>
             <option value="25">25×</option><option value="50">50×</option><option value="100">100×</option><option value="250">250×</option>
             <option value="500">500×</option><option value="1000">1000×</option><option value="2500">2500×</option>
+            <option value="custom">Custom…</option>
           </select></label>
+        <span id="speedCustomWrap" class="inline" hidden>
+          <input type="number" id="speedCustom" min="0.01" max="10000" step="any" aria-label="Custom playback speed">×
+        </span>
         <label class="inline">Layer <input type="number" id="layerIn" min="1" step="1"></label>
       </div>
       <div class="transport">
@@ -476,7 +496,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>window.PLAYBACK_ABOUT = {"version": "1.3.0", "entries": [{"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+<script>window.PLAYBACK_ABOUT = {"version": "1.4.0", "entries": [{"version": "1.4.0", "date": "2026-10-09", "changes": ["Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)", "Option to keep playing when you leave the Playback tab"]}, {"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
 /* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
@@ -1250,7 +1270,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 
   /* ------------------------------------------------------------------ preferences */
   const DEFAULT_PREFS = { speed: 10, color: 'feature', travel: false, layerOnly: false, follow: false,
-                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube', flags: {} };
+                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube', flags: {}, pauseOnLeave: true };
   let prefs = Object.assign({}, DEFAULT_PREFS);
   try { Object.assign(prefs, JSON.parse(localStorage.getItem('orca-playback-prefs') || '{}')); } catch (e) { /* storage may be off */ }
   let prefTimer = 0;
@@ -1942,13 +1962,32 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   $('bPrevL').onclick = () => stepLayer(-1);
   $('bNextL').onclick = () => stepLayer(1);
   $('layerIn').addEventListener('change', () => gotoLayer(parseInt($('layerIn').value, 10) || 1));
-  $('speedSel').value = String(prefs.speed);
-  $('speedSel').onchange = () => { prefs.speed = parseFloat($('speedSel').value); savePrefs(); };
+  /* Playback speed: presets, or any multiplier typed into the custom box (0.01× – 10000×). */
+  const presetSpeeds = () => [...$('speedSel').options].map(o => parseFloat(o.value)).filter(v => isFinite(v));
+  const fmtSpeed = (v) => (Math.round(v * 1000) / 1000) + '×';
+  function showSpeed() {
+    const isPreset = presetSpeeds().some(v => Math.abs(v - prefs.speed) < 1e-9);
+    $('speedSel').value = isPreset ? String(presetSpeeds().find(v => Math.abs(v - prefs.speed) < 1e-9)) : 'custom';
+    $('speedCustomWrap').hidden = isPreset;
+    if (!isPreset && document.activeElement !== $('speedCustom')) $('speedCustom').value = prefs.speed;
+  }
+  function setSpeed(v, announce) {
+    if (!isFinite(v) || v <= 0) return;
+    prefs.speed = Math.min(10000, Math.max(0.01, v)); savePrefs(); showSpeed();
+    if (announce) toast('Playback ' + fmtSpeed(prefs.speed));
+  }
+  $('speedSel').onchange = () => {
+    if ($('speedSel').value === 'custom') {
+      $('speedCustomWrap').hidden = false; $('speedCustom').value = prefs.speed; $('speedCustom').focus(); $('speedCustom').select();
+    } else setSpeed(parseFloat($('speedSel').value));
+  };
+  $('speedCustom').addEventListener('change', () => setSpeed(parseFloat($('speedCustom').value)));
+  $('speedCustom').addEventListener('keydown', (e) => { if (e.key === 'Enter') { setSpeed(parseFloat($('speedCustom').value)); $('speedCustom').blur(); } });
   function bumpSpeed(dir) {
-    const opts = [...$('speedSel').options].map(o => parseFloat(o.value));
-    let i = opts.indexOf(prefs.speed); if (i < 0) i = 3;
-    i = Math.max(0, Math.min(opts.length - 1, i + dir)); prefs.speed = opts[i]; $('speedSel').value = String(opts[i]); savePrefs();
-    toast('Playback ' + opts[i] + '×');
+    // the next preset above (or below) the current speed, custom values included
+    const opts = presetSpeeds().sort((p, q) => p - q);
+    const next = dir > 0 ? opts.find(v => v > prefs.speed + 1e-9) : [...opts].reverse().find(v => v < prefs.speed - 1e-9);
+    if (next != null) setSpeed(next, true);
   }
 
   document.addEventListener('keydown', (e) => {
@@ -1977,7 +2016,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     $('tTravel').classList.toggle('on', prefs.travel); $('tLayer').classList.toggle('on', prefs.layerOnly);
     $('tFollow').classList.toggle('on', prefs.follow);
     $('colorSel').value = prefs.color; $('motionSel').value = prefs.motion; $('lineSel').value = prefs.lines;
-    $('timingSel').value = prefs.timing; $('speedSel').value = String(prefs.speed);
+    $('timingSel').value = prefs.timing; showSpeed();
+    $('pauseLeaveChk').checked = prefs.pauseOnLeave !== false;
     $('headChk').checked = prefs.head !== false; $('gantryChk').checked = prefs.gantry !== false;
     $('shadeSel').value = prefs.shade || 'tube';
     headGroup.visible = prefs.head !== false; gantry.visible = prefs.gantry !== false;
@@ -2020,6 +2060,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     if (job) toast('Print time ' + (job.total < before ? '−' : '+') + fmtLong(Math.abs(job.total - before)) + ' → ' + fmtLong(job.total));
     if (wasPlaying) setPlaying(true);
   }
+  $('pauseLeaveChk').onchange = () => { prefs.pauseOnLeave = $('pauseLeaveChk').checked; savePrefs(); };
   $('headChk').onchange = () => { prefs.head = $('headChk').checked; headGroup.visible = prefs.head; savePrefs(); dirty = true; };
   $('gantryChk').onchange = () => { prefs.gantry = $('gantryChk').checked; gantry.visible = prefs.gantry; savePrefs(); dirty = true; };
   $('shadeSel').onchange = () => { prefs.shade = $('shadeSel').value; savePrefs(); recolor(); };
@@ -2088,14 +2129,22 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
      visibilitychange; as a second signal, a long gap between animation frames means the view was
      not being drawn (hidden), which is treated the same way. */
   let lastLoop = 0;
-  function onLeave() { if (playing) setPlaying(false); }
+  function onLeave() { if (playing && prefs.pauseOnLeave !== false) setPlaying(false); }
   function onReturn() { send({ cmd: 'check_latest' }); }
   document.addEventListener('visibilitychange', () => { if (document.hidden) onLeave(); else onReturn(); });
   window.addEventListener('pagehide', onLeave);
 
   function loop(now) {
     requestAnimationFrame(loop);
-    if (lastLoop && now - lastLoop > 1500) { onLeave(); onReturn(); }
+    if (lastLoop && now - lastLoop > 1500) {
+      // the view was hidden (no frames were drawn). If playback keeps going while away, catch the
+      // clock up by the time spent away so the print has progressed when you come back.
+      if (playing && prefs.pauseOnLeave === false && job) {
+        simT = Math.min(job.total, simT + (now - lastLoop) / 1000 * prefs.speed);
+        lastFrame = now; updateScene(true); updateHud();
+      }
+      onLeave(); onReturn();
+    }
     lastLoop = now;
     if (codeOpen && job && playing) {
       const cur = job.line[curMove];
@@ -4637,7 +4686,7 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
             for key, value in stored.items():
                 if key in DEFAULT_PREFS and isinstance(value, type(DEFAULT_PREFS[key])):
                     out[key] = value
-                elif key == "speed" and isinstance(value, (int, float)):
+                elif key == "speed" and isinstance(value, (int, float)) and not isinstance(value, bool):
                     out[key] = value
         return out
 

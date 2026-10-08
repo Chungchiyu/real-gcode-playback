@@ -156,6 +156,9 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
 #controls .time b { color: var(--fg); font-weight: 600; }
 #play { width: 40px; justify-content: center; }
 #layerIn { width: 66px; }
+#speedCustomWrap { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11.5px; }
+#speedCustomWrap[hidden] { display: none; }
+#speedCustom { width: 72px; }
 kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px; padding: 0 4px; }
 </style>
 </head>
@@ -282,6 +285,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       <div id="flagList" hidden></div>
       <label class="check"><input type="checkbox" id="headChk"> Show the hot end</label>
       <label class="check"><input type="checkbox" id="gantryChk"> Show the gantry</label>
+      <label class="check"><input type="checkbox" id="pauseLeaveChk"> Pause when leaving the Playback tab</label>
       <div class="about"><span id="verText">Playback</span> · <a href="#" id="logLink">What's new</a></div>
       <div id="changelog" hidden></div>
     </div>
@@ -293,10 +297,15 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       <div class="side left">
         <label class="inline">Speed
           <select id="speedSel" title="Playback speed (− / +)">
+            <option value="0.1">0.1×</option><option value="0.25">0.25×</option><option value="0.5">0.5×</option>
             <option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option>
             <option value="25">25×</option><option value="50">50×</option><option value="100">100×</option><option value="250">250×</option>
             <option value="500">500×</option><option value="1000">1000×</option><option value="2500">2500×</option>
+            <option value="custom">Custom…</option>
           </select></label>
+        <span id="speedCustomWrap" class="inline" hidden>
+          <input type="number" id="speedCustom" min="0.01" max="10000" step="any" aria-label="Custom playback speed">×
+        </span>
         <label class="inline">Layer <input type="number" id="layerIn" min="1" step="1"></label>
       </div>
       <div class="transport">
