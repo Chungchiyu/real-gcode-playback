@@ -8,7 +8,7 @@
 
   /* ------------------------------------------------------------------ preferences */
   const DEFAULT_PREFS = { speed: 10, color: 'feature', travel: false, layerOnly: false, follow: false,
-                          motion: 'auto', lines: 'fat', timing: 'aligned', autoLoad: true, head: true };
+                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube' };
   let prefs = Object.assign({}, DEFAULT_PREFS);
   try { Object.assign(prefs, JSON.parse(localStorage.getItem('orca-playback-prefs') || '{}')); } catch (e) { /* storage may be off */ }
   let prefTimer = 0;
@@ -170,10 +170,40 @@
   }
   function disposeObj(o) { if (!o) return; bedGroup.remove(o); o.geometry.dispose(); }
 
+  /* LineMaterial already finds, per pixel, how far the view ray passes from the line's axis
+     (WORLD_UNITS mode). That is exactly a cylinder: turn the distance into a surface normal and
+     light it, so extrusions read as round beads instead of flat ribbons. */
+  const shadeUniform = { value: 1 };
+  function shadedLineMaterial() {
+    const m = new THREE.LineMaterial({ vertexColors: true, worldUnits: true, linewidth: 0.42 });
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms.shadeMode = shadeUniform;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('uniform float opacity;', 'uniform float opacity;\nuniform float shadeMode;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+        #ifdef WORLD_UNITS
+          if ( shadeMode > 0.5 ) {
+            float r = linewidth * 0.5;
+            float s = clamp( len / r, 0.0, 1.0 );
+            vec3 ld = normalize( lineDir );
+            vec3 toCam = -normalize( p2 );
+            vec3 c = toCam - dot( toCam, ld ) * ld;
+            c = length( c ) > 1e-5 ? normalize( c ) : toCam;
+            vec3 side = len > 1e-6 ? -delta / len : vec3( 0.0 );
+            vec3 N = normalize( side * s + c * sqrt( max( 0.0, 1.0 - s * s ) ) );
+            vec3 L = normalize( vec3( -0.35, 0.6, 0.72 ) );
+            float diff = max( dot( N, L ), 0.0 );
+            float spec = pow( max( dot( N, normalize( L + toCam ) ), 0.0 ), 36.0 ) * 0.22;
+            diffuseColor.rgb = diffuseColor.rgb * ( 0.34 + 0.76 * diff ) + spec;
+          }
+        #endif`);
+    };
+    return m;
+  }
+
   function ensureMaterials() {
     if (!lineMat) {
-      lineMat = new THREE.LineMaterial({ vertexColors: true, worldUnits: true, linewidth: 0.42 });
-      lineMatPartial = new THREE.LineMaterial({ vertexColors: true, worldUnits: true, linewidth: 0.42 });
+      lineMat = shadedLineMaterial(); lineMatPartial = shadedLineMaterial();
       thinMat = new THREE.LineBasicMaterial({ vertexColors: true });
     }
     lineMat.linewidth = lineWidth(); lineMatPartial.linewidth = lineWidth();
@@ -260,7 +290,27 @@
         col[s * 6] = col[s * 6 + 3] = c[0]; col[s * 6 + 1] = col[s * 6 + 4] = c[1]; col[s * 6 + 2] = col[s * 6 + 5] = c[2];
       }
     }
+    applyShade();
     renderLegend(filColors);
+  }
+  function applyShade() {
+    shadeUniform.value = (prefs.shade === 'tube' || prefs.shade === 'layers') ? 1 : 0;
+    const col = R.col, segs = R.segMove.length;
+    if (prefs.shade === 'layers') {
+      // alternate layers slightly brighter / darker so individual layers are easy to count
+      for (let s = 0; s < segs; s++) {
+        const f = (job.layer[R.segMove[s]] & 1) ? 0.84 : 1.06;
+        for (let q = 0; q < 6; q++) col[s * 6 + q] = Math.min(1, col[s * 6 + q] * f);
+      }
+    } else if (prefs.shade === 'height') {
+      const z0 = job.bed.model.minZ, z1 = Math.max(z0 + 1e-3, job.bed.model.maxZ), P = job.pts;
+      for (let s = 0; s < segs; s++) {
+        const z = P[R.segMove[s] * 3 + 5];
+        const f = 0.45 + 0.6 * Math.max(0, Math.min(1, (z - z0) / (z1 - z0)));
+        for (let q = 0; q < 6; q++) col[s * 6 + q] = Math.min(1, col[s * 6 + q] * f);
+      }
+    }
+    dirty = true;
   }
   const featVisible = {};
 
@@ -571,8 +621,9 @@
     $('tFollow').classList.toggle('on', prefs.follow);
     $('colorSel').value = prefs.color; $('motionSel').value = prefs.motion; $('lineSel').value = prefs.lines;
     $('timingSel').value = prefs.timing; $('speedSel').value = String(prefs.speed);
-    $('autoChk').checked = !!prefs.autoLoad; $('headChk').checked = prefs.head !== false;
-    headGroup.visible = gantry.visible = prefs.head !== false;
+    $('headChk').checked = prefs.head !== false; $('gantryChk').checked = prefs.gantry !== false;
+    $('shadeSel').value = prefs.shade || 'tube';
+    headGroup.visible = prefs.head !== false; gantry.visible = prefs.gantry !== false;
   }
   $('optBtn').onclick = (e) => { e.stopPropagation(); $('optPanel').hidden = !$('optPanel').hidden; $('optBtn').classList.toggle('on', !$('optPanel').hidden); };
   document.addEventListener('pointerdown', (e) => {
@@ -580,18 +631,27 @@
       $('optPanel').hidden = true; $('optBtn').classList.remove('on');
     }
   });
-  $('autoChk').onchange = () => { prefs.autoLoad = $('autoChk').checked; savePrefs(); };
-  $('headChk').onchange = () => { prefs.head = $('headChk').checked; headGroup.visible = gantry.visible = prefs.head; savePrefs(); dirty = true; };
+  (function about() {
+    const info = window.PLAYBACK_ABOUT; if (!info) return;
+    $('verText').textContent = 'Playback v' + info.version;
+    const esc = (t) => String(t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    $('changelog').innerHTML = info.entries.map(e => '<h5>v' + esc(e.version) + ' <span>' + esc(e.date || '') + '</span></h5><ul>' +
+      e.changes.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>').join('');
+    $('logLink').onclick = (ev) => { ev.preventDefault(); $('changelog').hidden = !$('changelog').hidden; };
+  })();
+  $('headChk').onchange = () => { prefs.head = $('headChk').checked; headGroup.visible = prefs.head; savePrefs(); dirty = true; };
+  $('gantryChk').onchange = () => { prefs.gantry = $('gantryChk').checked; gantry.visible = prefs.gantry; savePrefs(); dirty = true; };
+  $('shadeSel').onchange = () => { prefs.shade = $('shadeSel').value; savePrefs(); recolor(); };
   $('tTravel').onclick = () => toggle('travel', $('tTravel'));
   $('tLayer').onclick = () => toggle('layerOnly', $('tLayer'));
   $('tFollow').onclick = () => toggle('follow', $('tFollow'));
-  $('colorSel').onchange = () => {
-    prefs.color = $('colorSel').value; savePrefs();
+  function recolor() {
     if (!job) return;
     computeColors();
     if (R.main.userData.thin) R.main.geometry.attributes.color.needsUpdate = true; else R.main.geometry.setColors(R.col);
     R.layerObjLayer = -1; updateScene(true);
-  };
+  }
+  $('colorSel').onchange = () => { prefs.color = $('colorSel').value; savePrefs(); recolor(); };
   $('motionSel').onchange = () => { prefs.motion = $('motionSel').value; savePrefs(); updateScene(true); };
   $('lineSel').onchange = () => { prefs.lines = $('lineSel').value; savePrefs(); if (job) { rebuildObjects(); updateScene(true); } };
   $('timingSel').onchange = () => {
@@ -643,8 +703,19 @@
   }
 
   /* ------------------------------------------------------------------ main loop */
+  /* Leaving the Playback tab pauses. OrcaSlicer hides the tab's web view, which the page sees as
+     visibilitychange; as a second signal, a long gap between animation frames means the view was
+     not being drawn (hidden), which is treated the same way. */
+  let lastLoop = 0;
+  function onLeave() { if (playing) setPlaying(false); }
+  function onReturn() { send({ cmd: 'check_latest' }); }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) onLeave(); else onReturn(); });
+  window.addEventListener('pagehide', onLeave);
+
   function loop(now) {
     requestAnimationFrame(loop);
+    if (lastLoop && now - lastLoop > 1500) { onLeave(); onReturn(); }
+    lastLoop = now;
     if (playing && job) {
       const dt = Math.min(0.25, (now - lastFrame) / 1000); lastFrame = now;
       simT += dt * prefs.speed;
@@ -668,9 +739,9 @@
       busy('Planning motion…', 0.88); await nextFrame();
       C.planJob(parsed, { align: prefs.timing === 'aligned' });
     } catch (err) {
-      busy(null); toast('Could not read this G-code: ' + err.message, true); console.error(err); return;
+      busy(null); toast('Could not read this G-code: ' + err.message, true); console.error(err); return false;
     }
-    if (parsed.moves < 2) { busy(null); toast('No moves found in this file.', true); return; }
+    if (parsed.moves < 2) { busy(null); toast('No moves found in this file.', true); return false; }
     job = parsed; gcodeText = text; lineStarts = null;
     busy('Building paths…', 0.95); await nextFrame();
     for (const k in featVisible) delete featVisible[k];
@@ -690,6 +761,7 @@
     frame(meta.keepView ? null : 'iso');
     updateScene(true); updateHud();
     busy(null);
+    return true;
   }
   function describeTiming() {
     const b = $('timingBadge'); b.hidden = false;
@@ -746,7 +818,7 @@
         await loadPlate(0);
       } else {
         $('plateSel').hidden = true; pendingPlates = null;
-        await loadText(await file.text(), { name: file.name, when: 'opened file' });
+        if (await loadText(await file.text(), { name: file.name, when: 'opened file' })) loadedStamp = null;
       }
     } catch (err) { busy(null); toast(err.message, true); }
   }
@@ -771,33 +843,47 @@
   let incoming = null;
   function requestLatest(quiet) {
     if (!host) { toast('Latest slice is only available inside OrcaSlicer.', true); return; }
-    if (!quiet) busy('Fetching the latest slice…', 0.02);
+    hideNewSlice();
+    busy('Fetching the latest slice…', 0.02);
     send({ cmd: 'load_latest', quiet: !!quiet });
   }
+  /* A newer slice than the one shown: load it if nothing is shown yet, otherwise ask. */
+  let loadedStamp = null, dismissedStamp = null, offeredStamp = null;
+  function considerLatest(latest) {
+    if (!latest || !latest.stamp) return;
+    if (latest.stamp === loadedStamp || latest.stamp === dismissedStamp) return;
+    if (incoming || $('busy').style.display === 'grid') return;
+    if (!job) { requestLatest(true); return; }
+    offeredStamp = latest.stamp;
+    $('newSliceWhen').textContent = latest.when ? '· ' + latest.when : '';
+    $('newSlice').hidden = false;
+  }
+  function hideNewSlice() { $('newSlice').hidden = true; }
+  $('nsLoad').onclick = () => requestLatest(false);
+  $('nsKeep').onclick = () => { dismissedStamp = offeredStamp; hideNewSlice(); };
   $('btnLatest').onclick = $('eLatest').onclick = () => requestLatest(false);
   $('btnLatest').disabled = !host; $('eLatest').disabled = !host;
 
-  let lastSeenSlice = null;
-  function onHostMessage(msg) {
+    function onHostMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     switch (msg.cmd) {
       case 'status': {
         if (msg.prefs && typeof msg.prefs === 'object') { Object.assign(prefs, msg.prefs); syncOptionUI(); }
         renderSetup(msg);
-        if (msg.latest && !job && prefs.autoLoad) requestLatest(true);
-        lastSeenSlice = msg.latest ? msg.latest.stamp : null;
+        considerLatest(msg.latest);
         break;
       }
-      case 'slice_ready': {
-        if (msg.stamp && msg.stamp === lastSeenSlice) break;
-        lastSeenSlice = msg.stamp;
+      case 'latest_info':
         renderSetup(msg);
-        if (prefs.autoLoad && !playing) requestLatest(true);
-        else toast('A new slice is ready — press Latest slice to load it.');
+        if (!document.hidden) considerLatest(msg.latest);
         break;
-      }
+      case 'slice_ready':
+        // sliced while this tab is hidden: nothing to do now, the check runs when the tab is shown
+        renderSetup(msg);
+        if (!document.hidden) considerLatest(msg.latest);
+        break;
       case 'gcode_begin':
-        incoming = { id: msg.id, name: msg.name, size: msg.size, when: msg.when, parts: new Array(msg.chunks), got: 0 };
+        incoming = { id: msg.id, name: msg.name, size: msg.size, when: msg.when, stamp: msg.stamp, parts: new Array(msg.chunks), got: 0 };
         busy('Receiving ' + (msg.name || 'G-code') + '…', 0.02);
         break;
       case 'gcode_chunk':
@@ -809,13 +895,13 @@
         if (!incoming || msg.id !== incoming.id) break;
         const inc = incoming; incoming = null;
         if (inc.got !== inc.parts.length) { busy(null); toast('The G-code transfer was incomplete; try again.', true); break; }
-        const keep = job && msg.reload ? { keepTime: simT, keepView: true } : {};
         $('plateSel').hidden = true; pendingPlates = null;
-        loadText(inc.parts.join(''), Object.assign({ name: inc.name, when: inc.when }, keep));
+        loadText(inc.parts.join(''), { name: inc.name, when: inc.when }).then((ok) => { if (ok) { loadedStamp = inc.stamp || null; hideNewSlice(); } });
         break;
       }
       case 'error':
         busy(null); if (!msg.quiet) toast(msg.message || 'Something went wrong', true);
+        if (msg.stamp) dismissedStamp = msg.stamp;     // don't retry the same failing slice on every visit
         if (msg.setup) renderSetup(msg);
         break;
       case 'toast': toast(msg.message); break;

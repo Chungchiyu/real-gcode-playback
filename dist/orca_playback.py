@@ -4,10 +4,27 @@
 # [tool.orcaslicer.plugin]
 # name = "Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
-# author = "Playback"
-# version = "1.0.0"
+# author = "NickChung"
+# version = "1.1.0"
 # ///
 """Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
+
+Changelog
+---------
+1.1.0 (2026-10-08)
+  - Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is
+  - Playback pauses when you leave the tab
+  - Shading options: round lit lines, layer contrast, height shading, flat colours
+  - Hot end and gantry can be shown or hidden separately
+  - Playback controls centred in the bottom bar
+1.0.0 (2026-10-08)
+  - Playback tab: real-time playback of the sliced G-code
+  - Motion planner with acceleration and cornering, synced to the slicer's time estimate
+  - Timeline with layer bands and filament change, pause and heating markers
+  - Colour by line type, actual speed, set speed, volumetric flow, layer time or filament
+  - Moving-bed view for bed slingers such as the A1 mini
+  - Loads the latest slice, or a .gcode / .gcode.3mf file
+  - Playback capture step for loading slices without permission prompts
 
 Two capabilities:
 
@@ -48,7 +65,7 @@ CHUNK_CHARS = 384 * 1024            # per message; each is one RunScript call in
 CAPTURE_NAME = "Playback capture"
 
 DEFAULT_PREFS = {"speed": 10, "color": "feature", "travel": False, "layerOnly": False, "follow": False,
-                 "motion": "auto", "lines": "fat", "timing": "aligned", "autoLoad": True, "head": True}
+                 "motion": "auto", "lines": "fat", "timing": "aligned", "head": True, "gantry": True, "shade": "tube"}
 
 SETUP_HINT = {
     "title": "One-time setup for automatic loading",
@@ -59,10 +76,41 @@ SETUP_HINT = {
     ],
 }
 
+CHANGELOG = {
+ "version": "1.1.0",
+ "entries": [
+  {
+   "version": "1.1.0",
+   "date": "2026-10-08",
+   "changes": [
+    "Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is",
+    "Playback pauses when you leave the tab",
+    "Shading options: round lit lines, layer contrast, height shading, flat colours",
+    "Hot end and gantry can be shown or hidden separately",
+    "Playback controls centred in the bottom bar"
+   ]
+  },
+  {
+   "version": "1.0.0",
+   "date": "2026-10-08",
+   "changes": [
+    "Playback tab: real-time playback of the sliced G-code",
+    "Motion planner with acceleration and cornering, synced to the slicer's time estimate",
+    "Timeline with layer bands and filament change, pause and heating markers",
+    "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament",
+    "Moving-bed view for bed slingers such as the A1 mini",
+    "Loads the latest slice, or a .gcode / .gcode.3mf file",
+    "Playback capture step for loading slices without permission prompts"
+   ]
+  }
+ ]
+}
+
 # The live page capability, so the capture capability can tell the tab a new slice arrived.
 _PAGE = None
 _PAGE_HTML = None
 _CAPTURE_SEEN = {"t": 0.0}          # when the capture capability last ran
+SESSION_START = time.time()         # a capture older than this OrcaSlicer session is not "new"
 
 
 # --------------------------------------------------------------------------- #
@@ -157,6 +205,10 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
          border-radius: 9px; padding: 7px 13px; opacity: 0; transition: opacity .2s; max-width: 70%; }
 #toast.show { opacity: 1; }
 #toast.err { border-color: var(--bad); }
+#newSlice { left: 50%; top: 10px; transform: translateX(-50%); z-index: 4; pointer-events: auto; display: flex; align-items: center; gap: 10px;
+            background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: 7px 8px 7px 12px;
+            box-shadow: 0 10px 28px rgba(0,0,0,.35); white-space: nowrap; }
+#newSlice[hidden] { display: none; }
 #optPanel { right: 10px; top: 8px; z-index: 5; pointer-events: auto; background: var(--panel); border: 1px solid var(--border);
             border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 9px; width: 290px;
             box-shadow: 0 10px 28px rgba(0,0,0,.35); }
@@ -164,14 +216,26 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
 #optPanel label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--muted); }
 #optPanel label.check { flex-direction: row; align-items: center; gap: 7px; color: var(--fg); font-size: 12px; }
 #optPanel select { width: 100%; }
+#optPanel .about { border-top: 1px solid var(--border); padding-top: 8px; font-size: 11.5px; color: var(--muted); }
+#optPanel .about a { color: var(--accent); text-decoration: none; }
+#changelog { max-height: 260px; overflow: auto; font-size: 11.5px; }
+#changelog h5 { margin: 8px 0 3px; font-size: 11.5px; }
+#changelog h5 span { color: var(--muted); font-weight: 400; }
+#changelog ul { margin: 0; padding-left: 16px; color: var(--muted); }
+#changelog li { margin: 2px 0; }
 
 #bottom { flex: none; border-top: 1px solid var(--border); background: var(--panel); padding: 6px 10px 8px; user-select: none; }
 #tl { position: relative; height: 34px; cursor: pointer; margin-bottom: 6px; }
 #tl canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 #tip { position: absolute; bottom: 38px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--border);
        border-radius: 7px; padding: 3px 8px; font: 11px var(--mono); white-space: nowrap; display: none; pointer-events: none; z-index: 3; }
-#controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-#controls .time { font: 12px var(--mono); color: var(--muted); min-width: 160px; }
+#controls { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; }
+#controls .side { display: flex; align-items: center; gap: 8px; min-width: 0; }
+#controls .side.right { justify-content: flex-end; }
+#controls .transport { display: flex; align-items: center; gap: 5px; }
+#controls .keys { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 980px) { #controls .keys { display: none; } }
+#controls .time { font: 12px var(--mono); color: var(--muted); white-space: nowrap; text-align: right; }
 #controls .time b { color: var(--fg); font-weight: 600; }
 #play { width: 40px; justify-content: center; }
 #layerIn { width: 66px; }
@@ -254,6 +318,12 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     <div id="drop" class="overlay">Drop G-code to play it</div>
     <div id="busy" class="overlay"><div class="box"><div id="busyText">Loading…</div><div class="pb"><i id="busyBar"></i></div></div></div>
     <div id="toast" class="overlay"></div>
+    <div id="newSlice" class="overlay" hidden>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+      <span><b>A newer slice is available</b> <span class="muted" id="newSliceWhen"></span></span>
+      <button class="primary" id="nsLoad">Load it</button>
+      <button id="nsKeep">Keep current</button>
+    </div>
     <div id="optPanel" class="overlay" hidden>
       <label>Printer motion
         <select id="motionSel">
@@ -271,14 +341,33 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
           <option value="aligned">Match the slicer's time estimate</option>
           <option value="planner">Motion planner only</option>
         </select></label>
-      <label class="check"><input type="checkbox" id="autoChk"> Load each new slice automatically</label>
-      <label class="check"><input type="checkbox" id="headChk"> Show the hot end and gantry</label>
+      <label>Shading
+        <select id="shadeSel">
+          <option value="tube">Round lines (lit)</option>
+          <option value="layers">Round lines + layer contrast</option>
+          <option value="height">Height shading</option>
+          <option value="flat">Flat colours</option>
+        </select></label>
+      <label class="check"><input type="checkbox" id="headChk"> Show the hot end</label>
+      <label class="check"><input type="checkbox" id="gantryChk"> Show the gantry</label>
+      <div class="about"><span id="verText">Playback</span> · <a href="#" id="logLink">What's new</a></div>
+      <div id="changelog" hidden></div>
     </div>
   </div>
 
   <div id="bottom">
     <div id="tl"><canvas id="tlc"></canvas><div id="tip"></div></div>
     <div id="controls">
+      <div class="side left">
+        <label class="inline">Speed
+          <select id="speedSel" title="Playback speed (− / +)">
+            <option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option>
+            <option value="25">25×</option><option value="50">50×</option><option value="100">100×</option><option value="250">250×</option>
+            <option value="500">500×</option><option value="1000">1000×</option><option value="2500">2500×</option>
+          </select></label>
+        <label class="inline">Layer <input type="number" id="layerIn" min="1" step="1"></label>
+      </div>
+      <div class="transport">
       <button class="icon" id="bStart" title="Start (Home)"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="5" width="2.6" height="14" rx="1"/><path d="M20 5.5v13a1 1 0 0 1-1.5.86L8.5 13a1.1 1.1 0 0 1 0-1.9l10-6.4A1 1 0 0 1 20 5.5z"/></svg></button>
       <button class="icon" id="bPrevL" title="Previous layer (↓)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 6l-6 6 6 6"/><path d="M19 6l-6 6 6 6"/></svg></button>
       <button class="icon" id="bPrevM" title="Previous move (←)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
@@ -286,23 +375,18 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       <button class="icon" id="bNextM" title="Next move (→)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
       <button class="icon" id="bNextL" title="Next layer (↑)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6l6 6-6 6"/><path d="M13 6l6 6-6 6"/></svg></button>
       <button class="icon" id="bEnd" title="End (End)"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="17.4" y="5" width="2.6" height="14" rx="1"/><path d="M4 5.5v13a1 1 0 0 0 1.5.86l10-6.4a1.1 1.1 0 0 0 0-1.9l-10-6.4A1 1 0 0 0 4 5.5z"/></svg></button>
-      <div class="sep"></div>
-      <label class="inline">Speed
-        <select id="speedSel" title="Playback speed (− / +)">
-          <option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option>
-          <option value="25">25×</option><option value="50">50×</option><option value="100">100×</option><option value="250">250×</option>
-          <option value="500">500×</option><option value="1000">1000×</option><option value="2500">2500×</option>
-        </select></label>
-      <label class="inline">Layer <input type="number" id="layerIn" min="1" step="1"></label>
-      <div class="grow"></div>
-      <div class="time"><b id="cTime">0:00</b> / <span id="cTotal">0:00</span> · <span id="cPct">0%</span></div>
-      <span class="muted" style="font-size:11px" title="Keyboard"><kbd>Space</kbd> play <kbd>←→</kbd> move <kbd>↑↓</kbd> layer <kbd>±</kbd> speed</span>
+      </div>
+      <div class="side right">
+        <span class="muted keys" title="Keyboard"><kbd>Space</kbd> play <kbd>←→</kbd> move <kbd>↑↓</kbd> layer <kbd>±</kbd> speed</span>
+        <div class="time"><b id="cTime">0:00</b> / <span id="cTotal">0:00</span> · <span id="cPct">0%</span></div>
+      </div>
     </div>
   </div>
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>/* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
+<script>window.PLAYBACK_ABOUT = {"version": "1.1.0", "entries": [{"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+/* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
  *   Job.moves        number of moves (move i goes from point i to point i+1)
@@ -979,7 +1063,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 
   /* ------------------------------------------------------------------ preferences */
   const DEFAULT_PREFS = { speed: 10, color: 'feature', travel: false, layerOnly: false, follow: false,
-                          motion: 'auto', lines: 'fat', timing: 'aligned', autoLoad: true, head: true };
+                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube' };
   let prefs = Object.assign({}, DEFAULT_PREFS);
   try { Object.assign(prefs, JSON.parse(localStorage.getItem('orca-playback-prefs') || '{}')); } catch (e) { /* storage may be off */ }
   let prefTimer = 0;
@@ -1141,10 +1225,40 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   }
   function disposeObj(o) { if (!o) return; bedGroup.remove(o); o.geometry.dispose(); }
 
+  /* LineMaterial already finds, per pixel, how far the view ray passes from the line's axis
+     (WORLD_UNITS mode). That is exactly a cylinder: turn the distance into a surface normal and
+     light it, so extrusions read as round beads instead of flat ribbons. */
+  const shadeUniform = { value: 1 };
+  function shadedLineMaterial() {
+    const m = new THREE.LineMaterial({ vertexColors: true, worldUnits: true, linewidth: 0.42 });
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms.shadeMode = shadeUniform;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('uniform float opacity;', 'uniform float opacity;\nuniform float shadeMode;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+        #ifdef WORLD_UNITS
+          if ( shadeMode > 0.5 ) {
+            float r = linewidth * 0.5;
+            float s = clamp( len / r, 0.0, 1.0 );
+            vec3 ld = normalize( lineDir );
+            vec3 toCam = -normalize( p2 );
+            vec3 c = toCam - dot( toCam, ld ) * ld;
+            c = length( c ) > 1e-5 ? normalize( c ) : toCam;
+            vec3 side = len > 1e-6 ? -delta / len : vec3( 0.0 );
+            vec3 N = normalize( side * s + c * sqrt( max( 0.0, 1.0 - s * s ) ) );
+            vec3 L = normalize( vec3( -0.35, 0.6, 0.72 ) );
+            float diff = max( dot( N, L ), 0.0 );
+            float spec = pow( max( dot( N, normalize( L + toCam ) ), 0.0 ), 36.0 ) * 0.22;
+            diffuseColor.rgb = diffuseColor.rgb * ( 0.34 + 0.76 * diff ) + spec;
+          }
+        #endif`);
+    };
+    return m;
+  }
+
   function ensureMaterials() {
     if (!lineMat) {
-      lineMat = new THREE.LineMaterial({ vertexColors: true, worldUnits: true, linewidth: 0.42 });
-      lineMatPartial = new THREE.LineMaterial({ vertexColors: true, worldUnits: true, linewidth: 0.42 });
+      lineMat = shadedLineMaterial(); lineMatPartial = shadedLineMaterial();
       thinMat = new THREE.LineBasicMaterial({ vertexColors: true });
     }
     lineMat.linewidth = lineWidth(); lineMatPartial.linewidth = lineWidth();
@@ -1231,7 +1345,27 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         col[s * 6] = col[s * 6 + 3] = c[0]; col[s * 6 + 1] = col[s * 6 + 4] = c[1]; col[s * 6 + 2] = col[s * 6 + 5] = c[2];
       }
     }
+    applyShade();
     renderLegend(filColors);
+  }
+  function applyShade() {
+    shadeUniform.value = (prefs.shade === 'tube' || prefs.shade === 'layers') ? 1 : 0;
+    const col = R.col, segs = R.segMove.length;
+    if (prefs.shade === 'layers') {
+      // alternate layers slightly brighter / darker so individual layers are easy to count
+      for (let s = 0; s < segs; s++) {
+        const f = (job.layer[R.segMove[s]] & 1) ? 0.84 : 1.06;
+        for (let q = 0; q < 6; q++) col[s * 6 + q] = Math.min(1, col[s * 6 + q] * f);
+      }
+    } else if (prefs.shade === 'height') {
+      const z0 = job.bed.model.minZ, z1 = Math.max(z0 + 1e-3, job.bed.model.maxZ), P = job.pts;
+      for (let s = 0; s < segs; s++) {
+        const z = P[R.segMove[s] * 3 + 5];
+        const f = 0.45 + 0.6 * Math.max(0, Math.min(1, (z - z0) / (z1 - z0)));
+        for (let q = 0; q < 6; q++) col[s * 6 + q] = Math.min(1, col[s * 6 + q] * f);
+      }
+    }
+    dirty = true;
   }
   const featVisible = {};
 
@@ -1542,8 +1676,9 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     $('tFollow').classList.toggle('on', prefs.follow);
     $('colorSel').value = prefs.color; $('motionSel').value = prefs.motion; $('lineSel').value = prefs.lines;
     $('timingSel').value = prefs.timing; $('speedSel').value = String(prefs.speed);
-    $('autoChk').checked = !!prefs.autoLoad; $('headChk').checked = prefs.head !== false;
-    headGroup.visible = gantry.visible = prefs.head !== false;
+    $('headChk').checked = prefs.head !== false; $('gantryChk').checked = prefs.gantry !== false;
+    $('shadeSel').value = prefs.shade || 'tube';
+    headGroup.visible = prefs.head !== false; gantry.visible = prefs.gantry !== false;
   }
   $('optBtn').onclick = (e) => { e.stopPropagation(); $('optPanel').hidden = !$('optPanel').hidden; $('optBtn').classList.toggle('on', !$('optPanel').hidden); };
   document.addEventListener('pointerdown', (e) => {
@@ -1551,18 +1686,27 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       $('optPanel').hidden = true; $('optBtn').classList.remove('on');
     }
   });
-  $('autoChk').onchange = () => { prefs.autoLoad = $('autoChk').checked; savePrefs(); };
-  $('headChk').onchange = () => { prefs.head = $('headChk').checked; headGroup.visible = gantry.visible = prefs.head; savePrefs(); dirty = true; };
+  (function about() {
+    const info = window.PLAYBACK_ABOUT; if (!info) return;
+    $('verText').textContent = 'Playback v' + info.version;
+    const esc = (t) => String(t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    $('changelog').innerHTML = info.entries.map(e => '<h5>v' + esc(e.version) + ' <span>' + esc(e.date || '') + '</span></h5><ul>' +
+      e.changes.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>').join('');
+    $('logLink').onclick = (ev) => { ev.preventDefault(); $('changelog').hidden = !$('changelog').hidden; };
+  })();
+  $('headChk').onchange = () => { prefs.head = $('headChk').checked; headGroup.visible = prefs.head; savePrefs(); dirty = true; };
+  $('gantryChk').onchange = () => { prefs.gantry = $('gantryChk').checked; gantry.visible = prefs.gantry; savePrefs(); dirty = true; };
+  $('shadeSel').onchange = () => { prefs.shade = $('shadeSel').value; savePrefs(); recolor(); };
   $('tTravel').onclick = () => toggle('travel', $('tTravel'));
   $('tLayer').onclick = () => toggle('layerOnly', $('tLayer'));
   $('tFollow').onclick = () => toggle('follow', $('tFollow'));
-  $('colorSel').onchange = () => {
-    prefs.color = $('colorSel').value; savePrefs();
+  function recolor() {
     if (!job) return;
     computeColors();
     if (R.main.userData.thin) R.main.geometry.attributes.color.needsUpdate = true; else R.main.geometry.setColors(R.col);
     R.layerObjLayer = -1; updateScene(true);
-  };
+  }
+  $('colorSel').onchange = () => { prefs.color = $('colorSel').value; savePrefs(); recolor(); };
   $('motionSel').onchange = () => { prefs.motion = $('motionSel').value; savePrefs(); updateScene(true); };
   $('lineSel').onchange = () => { prefs.lines = $('lineSel').value; savePrefs(); if (job) { rebuildObjects(); updateScene(true); } };
   $('timingSel').onchange = () => {
@@ -1614,8 +1758,19 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   }
 
   /* ------------------------------------------------------------------ main loop */
+  /* Leaving the Playback tab pauses. OrcaSlicer hides the tab's web view, which the page sees as
+     visibilitychange; as a second signal, a long gap between animation frames means the view was
+     not being drawn (hidden), which is treated the same way. */
+  let lastLoop = 0;
+  function onLeave() { if (playing) setPlaying(false); }
+  function onReturn() { send({ cmd: 'check_latest' }); }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) onLeave(); else onReturn(); });
+  window.addEventListener('pagehide', onLeave);
+
   function loop(now) {
     requestAnimationFrame(loop);
+    if (lastLoop && now - lastLoop > 1500) { onLeave(); onReturn(); }
+    lastLoop = now;
     if (playing && job) {
       const dt = Math.min(0.25, (now - lastFrame) / 1000); lastFrame = now;
       simT += dt * prefs.speed;
@@ -1639,9 +1794,9 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       busy('Planning motion…', 0.88); await nextFrame();
       C.planJob(parsed, { align: prefs.timing === 'aligned' });
     } catch (err) {
-      busy(null); toast('Could not read this G-code: ' + err.message, true); console.error(err); return;
+      busy(null); toast('Could not read this G-code: ' + err.message, true); console.error(err); return false;
     }
-    if (parsed.moves < 2) { busy(null); toast('No moves found in this file.', true); return; }
+    if (parsed.moves < 2) { busy(null); toast('No moves found in this file.', true); return false; }
     job = parsed; gcodeText = text; lineStarts = null;
     busy('Building paths…', 0.95); await nextFrame();
     for (const k in featVisible) delete featVisible[k];
@@ -1661,6 +1816,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     frame(meta.keepView ? null : 'iso');
     updateScene(true); updateHud();
     busy(null);
+    return true;
   }
   function describeTiming() {
     const b = $('timingBadge'); b.hidden = false;
@@ -1717,7 +1873,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         await loadPlate(0);
       } else {
         $('plateSel').hidden = true; pendingPlates = null;
-        await loadText(await file.text(), { name: file.name, when: 'opened file' });
+        if (await loadText(await file.text(), { name: file.name, when: 'opened file' })) loadedStamp = null;
       }
     } catch (err) { busy(null); toast(err.message, true); }
   }
@@ -1742,33 +1898,47 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   let incoming = null;
   function requestLatest(quiet) {
     if (!host) { toast('Latest slice is only available inside OrcaSlicer.', true); return; }
-    if (!quiet) busy('Fetching the latest slice…', 0.02);
+    hideNewSlice();
+    busy('Fetching the latest slice…', 0.02);
     send({ cmd: 'load_latest', quiet: !!quiet });
   }
+  /* A newer slice than the one shown: load it if nothing is shown yet, otherwise ask. */
+  let loadedStamp = null, dismissedStamp = null, offeredStamp = null;
+  function considerLatest(latest) {
+    if (!latest || !latest.stamp) return;
+    if (latest.stamp === loadedStamp || latest.stamp === dismissedStamp) return;
+    if (incoming || $('busy').style.display === 'grid') return;
+    if (!job) { requestLatest(true); return; }
+    offeredStamp = latest.stamp;
+    $('newSliceWhen').textContent = latest.when ? '· ' + latest.when : '';
+    $('newSlice').hidden = false;
+  }
+  function hideNewSlice() { $('newSlice').hidden = true; }
+  $('nsLoad').onclick = () => requestLatest(false);
+  $('nsKeep').onclick = () => { dismissedStamp = offeredStamp; hideNewSlice(); };
   $('btnLatest').onclick = $('eLatest').onclick = () => requestLatest(false);
   $('btnLatest').disabled = !host; $('eLatest').disabled = !host;
 
-  let lastSeenSlice = null;
-  function onHostMessage(msg) {
+    function onHostMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     switch (msg.cmd) {
       case 'status': {
         if (msg.prefs && typeof msg.prefs === 'object') { Object.assign(prefs, msg.prefs); syncOptionUI(); }
         renderSetup(msg);
-        if (msg.latest && !job && prefs.autoLoad) requestLatest(true);
-        lastSeenSlice = msg.latest ? msg.latest.stamp : null;
+        considerLatest(msg.latest);
         break;
       }
-      case 'slice_ready': {
-        if (msg.stamp && msg.stamp === lastSeenSlice) break;
-        lastSeenSlice = msg.stamp;
+      case 'latest_info':
         renderSetup(msg);
-        if (prefs.autoLoad && !playing) requestLatest(true);
-        else toast('A new slice is ready — press Latest slice to load it.');
+        if (!document.hidden) considerLatest(msg.latest);
         break;
-      }
+      case 'slice_ready':
+        // sliced while this tab is hidden: nothing to do now, the check runs when the tab is shown
+        renderSetup(msg);
+        if (!document.hidden) considerLatest(msg.latest);
+        break;
       case 'gcode_begin':
-        incoming = { id: msg.id, name: msg.name, size: msg.size, when: msg.when, parts: new Array(msg.chunks), got: 0 };
+        incoming = { id: msg.id, name: msg.name, size: msg.size, when: msg.when, stamp: msg.stamp, parts: new Array(msg.chunks), got: 0 };
         busy('Receiving ' + (msg.name || 'G-code') + '…', 0.02);
         break;
       case 'gcode_chunk':
@@ -1780,13 +1950,13 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         if (!incoming || msg.id !== incoming.id) break;
         const inc = incoming; incoming = null;
         if (inc.got !== inc.parts.length) { busy(null); toast('The G-code transfer was incomplete; try again.', true); break; }
-        const keep = job && msg.reload ? { keepTime: simT, keepView: true } : {};
         $('plateSel').hidden = true; pendingPlates = null;
-        loadText(inc.parts.join(''), Object.assign({ name: inc.name, when: inc.when }, keep));
+        loadText(inc.parts.join(''), { name: inc.name, when: inc.when }).then((ok) => { if (ok) { loadedStamp = inc.stamp || null; hideNewSlice(); } });
         break;
       }
       case 'error':
         busy(null); if (!msg.quiet) toast(msg.message || 'Something went wrong', true);
+        if (msg.stamp) dismissedStamp = msg.stamp;     // don't retry the same failing slice on every visit
         if (msg.setup) renderSetup(msg);
         break;
       case 'toast': toast(msg.message); break;
@@ -4137,13 +4307,25 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                     out[key] = value
         return out
 
+    def latest(self):
+        """Identify the newest slice of this session without reading it.
+        The stamp is what the page compares with the G-code it shows."""
+        meta = read_capture_meta()
+        fresh_capture = meta and meta["mtime"] >= SESSION_START - 5 and \
+            (not self.slice_done_at or meta["mtime"] >= self.slice_done_at - 30)
+        if fresh_capture:
+            return {"stamp": f"c{meta['mtime']:.3f}", "name": meta.get("name", ""), "when": when_text(meta["mtime"])}
+        if self.slice_done_at:
+            return {"stamp": f"s{self.slice_done_at:.3f}", "name": "", "when": when_text(self.slice_done_at)}
+        return None
+
     def status(self, cmd="status"):
         meta = read_capture_meta()
-        payload = {"cmd": cmd, "prefs": self.prefs(),
-                   "capture_enabled": bool(meta) or _CAPTURE_SEEN["t"] > 0, "hint": SETUP_HINT}
-        if meta:
-            payload["latest"] = {"stamp": f"{meta.get('mtime', 0):.3f}", "name": meta.get("name", "")}
-            payload["stamp"] = payload["latest"]["stamp"]
+        payload = {"cmd": cmd, "capture_enabled": bool(meta) or _CAPTURE_SEEN["t"] > 0, "hint": SETUP_HINT,
+                   "latest": self.latest()}
+        if cmd == "status":
+            payload["prefs"] = self.prefs()
+            payload["about"] = CHANGELOG
         return payload
 
     # ---- page messages (UI thread: keep quick) ------------------------------
@@ -4154,6 +4336,8 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
         try:
             if cmd == "hello":
                 self.post(self.status())
+            elif cmd == "check_latest":
+                self.post(self.status("latest_info"))
             elif cmd == "load_latest":
                 if not self.loading:
                     self.loading = True
@@ -4183,39 +4367,40 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
             if meta and meta.get("mtime", 0) >= self.slice_done_at - 30:
                 break
             time.sleep(0.25)
-        payload = self.status("slice_ready")
-        payload.setdefault("stamp", f"{self.slice_done_at:.3f}")
-        self.post(payload)
+        self.post(self.status("slice_ready"))
 
     # ---- sending G-code to the page (worker thread) --------------------------
-    def pick_source(self, allow_temp=True):
+    def pick_source(self, allow_temp=True):  # -> (path, mtime, name, how, stamp)
         """Return (path, mtime, name, how) for the newest G-code of the current session.
         The temp-folder fallback can raise OrcaSlicer's permission prompt, so it only runs when the
         user pressed the button, never for an automatic reload."""
         meta = read_capture_meta()
         fresh_capture = meta and (not self.slice_done_at or meta["mtime"] >= self.slice_done_at - 30)
         if fresh_capture:
-            return CAPTURE_FILE, meta["mtime"], meta.get("name") or "Latest slice", "capture"
+            return CAPTURE_FILE, meta["mtime"], meta.get("name") or "Latest slice", "capture", f"c{meta['mtime']:.3f}"
         temp = None
         try:
             temp = find_temp_gcode() if allow_temp else None
         except Exception:
             temp = None          # permission declined or nothing there
         if temp and (not meta or temp[1] > meta["mtime"]):
-            return temp[0], temp[1], "Latest slice", "temp"
+            stamp = f"s{self.slice_done_at:.3f}" if self.slice_done_at else f"t{temp[1]:.3f}"
+            return temp[0], temp[1], "Latest slice", "temp", stamp
         if meta:
-            return CAPTURE_FILE, meta["mtime"], meta.get("name") or "Latest slice", "capture"
+            return CAPTURE_FILE, meta["mtime"], meta.get("name") or "Latest slice", "capture", f"c{meta['mtime']:.3f}"
         return None
 
     def send_latest(self, quiet):
         try:
-            src = self.pick_source(allow_temp=not quiet)
+            # every load is a direct result of the user opening the tab or pressing the button,
+            # so the temp-folder fallback (which may show OrcaSlicer's permission prompt) is fine
+            src = self.pick_source(allow_temp=True)
             if not src:
                 self.post({"cmd": "error", "quiet": quiet, "setup": True, "capture_enabled": False, "hint": SETUP_HINT,
                            "message": "No sliced G-code found yet. Slice a plate first"
                                       " (or set up Playback capture, see the tab)."})
                 return
-            path, mtime, name, how = src
+            path, mtime, name, how, stamp = src
             stable(path)
             with open(path, "r", encoding="utf-8", errors="replace") as handle:
                 text = handle.read()
@@ -4224,7 +4409,7 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                 tid = self.transfer_id
             chunks = [text[i:i + CHUNK_CHARS] for i in range(0, len(text), CHUNK_CHARS)] or [""]
             self.post({"cmd": "gcode_begin", "id": tid, "name": name, "size": len(text),
-                       "chunks": len(chunks), "when": when_text(mtime), "source": how})
+                       "chunks": len(chunks), "when": when_text(mtime), "source": how, "stamp": stamp})
             for index, part in enumerate(chunks):
                 with self.lock:
                     if tid != self.transfer_id:
@@ -4232,7 +4417,9 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                 self.post({"cmd": "gcode_chunk", "id": tid, "i": index, "data": part})
             self.post({"cmd": "gcode_end", "id": tid, "reload": quiet})
         except PermissionError:
+            latest = self.latest() or {}
             self.post({"cmd": "error", "quiet": False, "setup": True, "capture_enabled": False, "hint": SETUP_HINT,
+                       "stamp": latest.get("stamp"),
                        "message": "OrcaSlicer did not allow reading the temporary G-code."
                                   " Set up Playback capture to load slices without asking."})
         except Exception as exc:

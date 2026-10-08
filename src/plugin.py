@@ -4,10 +4,14 @@
 # [tool.orcaslicer.plugin]
 # name = "Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
-# author = "Playback"
+# author = "NickChung"
 # version = "@@VERSION@@"
 # ///
 """Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
+
+Changelog
+---------
+@@CHANGELOG_TEXT@@
 
 Two capabilities:
 
@@ -48,7 +52,7 @@ CHUNK_CHARS = 384 * 1024            # per message; each is one RunScript call in
 CAPTURE_NAME = "Playback capture"
 
 DEFAULT_PREFS = {"speed": 10, "color": "feature", "travel": False, "layerOnly": False, "follow": False,
-                 "motion": "auto", "lines": "fat", "timing": "aligned", "autoLoad": True, "head": True}
+                 "motion": "auto", "lines": "fat", "timing": "aligned", "head": True, "gantry": True, "shade": "tube"}
 
 SETUP_HINT = {
     "title": "One-time setup for automatic loading",
@@ -59,10 +63,13 @@ SETUP_HINT = {
     ],
 }
 
+CHANGELOG = @@CHANGELOG_JSON@@
+
 # The live page capability, so the capture capability can tell the tab a new slice arrived.
 _PAGE = None
 _PAGE_HTML = None
 _CAPTURE_SEEN = {"t": 0.0}          # when the capture capability last ran
+SESSION_START = time.time()         # a capture older than this OrcaSlicer session is not "new"
 
 
 # --------------------------------------------------------------------------- #
@@ -208,13 +215,25 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                     out[key] = value
         return out
 
+    def latest(self):
+        """Identify the newest slice of this session without reading it.
+        The stamp is what the page compares with the G-code it shows."""
+        meta = read_capture_meta()
+        fresh_capture = meta and meta["mtime"] >= SESSION_START - 5 and \
+            (not self.slice_done_at or meta["mtime"] >= self.slice_done_at - 30)
+        if fresh_capture:
+            return {"stamp": f"c{meta['mtime']:.3f}", "name": meta.get("name", ""), "when": when_text(meta["mtime"])}
+        if self.slice_done_at:
+            return {"stamp": f"s{self.slice_done_at:.3f}", "name": "", "when": when_text(self.slice_done_at)}
+        return None
+
     def status(self, cmd="status"):
         meta = read_capture_meta()
-        payload = {"cmd": cmd, "prefs": self.prefs(),
-                   "capture_enabled": bool(meta) or _CAPTURE_SEEN["t"] > 0, "hint": SETUP_HINT}
-        if meta:
-            payload["latest"] = {"stamp": f"{meta.get('mtime', 0):.3f}", "name": meta.get("name", "")}
-            payload["stamp"] = payload["latest"]["stamp"]
+        payload = {"cmd": cmd, "capture_enabled": bool(meta) or _CAPTURE_SEEN["t"] > 0, "hint": SETUP_HINT,
+                   "latest": self.latest()}
+        if cmd == "status":
+            payload["prefs"] = self.prefs()
+            payload["about"] = CHANGELOG
         return payload
 
     # ---- page messages (UI thread: keep quick) ------------------------------
@@ -225,6 +244,8 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
         try:
             if cmd == "hello":
                 self.post(self.status())
+            elif cmd == "check_latest":
+                self.post(self.status("latest_info"))
             elif cmd == "load_latest":
                 if not self.loading:
                     self.loading = True
@@ -254,39 +275,40 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
             if meta and meta.get("mtime", 0) >= self.slice_done_at - 30:
                 break
             time.sleep(0.25)
-        payload = self.status("slice_ready")
-        payload.setdefault("stamp", f"{self.slice_done_at:.3f}")
-        self.post(payload)
+        self.post(self.status("slice_ready"))
 
     # ---- sending G-code to the page (worker thread) --------------------------
-    def pick_source(self, allow_temp=True):
+    def pick_source(self, allow_temp=True):  # -> (path, mtime, name, how, stamp)
         """Return (path, mtime, name, how) for the newest G-code of the current session.
         The temp-folder fallback can raise OrcaSlicer's permission prompt, so it only runs when the
         user pressed the button, never for an automatic reload."""
         meta = read_capture_meta()
         fresh_capture = meta and (not self.slice_done_at or meta["mtime"] >= self.slice_done_at - 30)
         if fresh_capture:
-            return CAPTURE_FILE, meta["mtime"], meta.get("name") or "Latest slice", "capture"
+            return CAPTURE_FILE, meta["mtime"], meta.get("name") or "Latest slice", "capture", f"c{meta['mtime']:.3f}"
         temp = None
         try:
             temp = find_temp_gcode() if allow_temp else None
         except Exception:
             temp = None          # permission declined or nothing there
         if temp and (not meta or temp[1] > meta["mtime"]):
-            return temp[0], temp[1], "Latest slice", "temp"
+            stamp = f"s{self.slice_done_at:.3f}" if self.slice_done_at else f"t{temp[1]:.3f}"
+            return temp[0], temp[1], "Latest slice", "temp", stamp
         if meta:
-            return CAPTURE_FILE, meta["mtime"], meta.get("name") or "Latest slice", "capture"
+            return CAPTURE_FILE, meta["mtime"], meta.get("name") or "Latest slice", "capture", f"c{meta['mtime']:.3f}"
         return None
 
     def send_latest(self, quiet):
         try:
-            src = self.pick_source(allow_temp=not quiet)
+            # every load is a direct result of the user opening the tab or pressing the button,
+            # so the temp-folder fallback (which may show OrcaSlicer's permission prompt) is fine
+            src = self.pick_source(allow_temp=True)
             if not src:
                 self.post({"cmd": "error", "quiet": quiet, "setup": True, "capture_enabled": False, "hint": SETUP_HINT,
                            "message": "No sliced G-code found yet. Slice a plate first"
                                       " (or set up Playback capture, see the tab)."})
                 return
-            path, mtime, name, how = src
+            path, mtime, name, how, stamp = src
             stable(path)
             with open(path, "r", encoding="utf-8", errors="replace") as handle:
                 text = handle.read()
@@ -295,7 +317,7 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                 tid = self.transfer_id
             chunks = [text[i:i + CHUNK_CHARS] for i in range(0, len(text), CHUNK_CHARS)] or [""]
             self.post({"cmd": "gcode_begin", "id": tid, "name": name, "size": len(text),
-                       "chunks": len(chunks), "when": when_text(mtime), "source": how})
+                       "chunks": len(chunks), "when": when_text(mtime), "source": how, "stamp": stamp})
             for index, part in enumerate(chunks):
                 with self.lock:
                     if tid != self.transfer_id:
@@ -303,7 +325,9 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                 self.post({"cmd": "gcode_chunk", "id": tid, "i": index, "data": part})
             self.post({"cmd": "gcode_end", "id": tid, "reload": quiet})
         except PermissionError:
+            latest = self.latest() or {}
             self.post({"cmd": "error", "quiet": False, "setup": True, "capture_enabled": False, "hint": SETUP_HINT,
+                       "stamp": latest.get("stamp"),
                        "message": "OrcaSlicer did not allow reading the temporary G-code."
                                   " Set up Playback capture to load slices without asking."})
         except Exception as exc:
