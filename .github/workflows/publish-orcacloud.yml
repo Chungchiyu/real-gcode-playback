@@ -79,9 +79,10 @@ jobs:
             metadata="$(jq -cn --arg version "$VERSION" '{version: $version}')"
           fi
 
+          # --form-string: with -F, curl would cut the metadata at the first ";" in the changelog.
           status="$(curl -sS -o response.json -w '%{http_code}' \
             -H "Authorization: Bearer $oidc_token" \
-            -F "metadata=$metadata" \
+            --form-string "metadata=$metadata" \
             -F "files=@release/real_gcode_playback_any.py" \
             https://api.orcaslicer.com/api/v1/plugin-publish/releases)"
           cat response.json; echo
