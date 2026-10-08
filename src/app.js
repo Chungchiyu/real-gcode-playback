@@ -457,7 +457,7 @@
     $('hSrc').textContent = sourceLine(job.line[k]);
     if (codeOpen) {
       const cur = job.line[k];
-      if (cur !== codeLastCur) { codeLastCur = cur; codeFollowTo(true); renderCode(); }
+      if (cur !== codeLastCur) { codeLastCur = cur; codeFollowTo(!playing); renderCode(); }
     }
     // bottom bar
     $('cTime').textContent = fmtTime(simT); $('cTotal').textContent = fmtTime(job.total);
@@ -493,7 +493,7 @@
   function codeCount() { return ensureLineStarts() ? lineStarts.length : 0; }
   function codeGeom() {
     const n = codeCount(), view = codeScroll.clientHeight || 288;
-    const realH = n * ROW, H = Math.min(realH, MAX_SCROLL_H), vis = Math.ceil(view / ROW);
+    const realH = n * ROW, H = Math.min(realH, MAX_SCROLL_H), vis = Math.floor(view / ROW);
     return { n, view, H, scaled: realH > MAX_SCROLL_H, vis };
   }
   function firstLineAt(top, g) {      // 0-based index of the first row shown for a scrollTop
@@ -523,7 +523,7 @@
     const offset = g.scaled ? top : first * ROW;
     const cur = job.line[curMove] || 0;
     let html = '';
-    for (let i = first; i < Math.min(g.n, first + g.vis + 2); i++) {
+    for (let i = first; i < Math.min(g.n, first + g.vis + 3); i++) {
       const no = i + 1;
       html += '<div class="ln' + (no === cur ? ' cur' : no < cur ? ' past' : '') + (no === flashLine && performance.now() < flashUntil ? ' flash' : '') + '" data-line="' + no + '"><span class="no">' + no +
               '</span><span class="tx">' + highlight(lineText(no, 220)) + '</span></div>';
@@ -532,11 +532,14 @@
     codeRows.innerHTML = html;
     $('codeInfo').textContent = 'Line ' + (cur || '–') + ' of ' + g.n.toLocaleString();
   }
+  /* Following keeps the running line pinned to the middle row. While playing it moves straight
+     there (an eased glide falls behind at high speeds and the highlight drifts out of view);
+     the glide is only used for one-off jumps, such as pressing Follow. */
   function codeFollowTo(animate) {
     if (!codeOpen || !codeFollow || !job) return;
     const g = codeGeom(), cur = (job.line[curMove] || 1) - 1;
-    const target = scrollTopFor(cur - Math.floor(g.vis / 2), g);
-    if (!animate || Math.abs(target - codeScroll.scrollTop) > g.view * 40) { setCodeScroll(target); codeTarget = null; }
+    const target = scrollTopFor(cur - Math.floor((g.vis - 1) / 2), g);
+    if (!animate || playing || Math.abs(target - codeScroll.scrollTop) > g.view * 40) { setCodeScroll(target); codeTarget = null; }
     else codeTarget = target;
   }
   function setCodeScroll(v) { codeScroll.scrollTop = v; renderCode(); }
@@ -827,6 +830,10 @@
     requestAnimationFrame(loop);
     if (lastLoop && now - lastLoop > 1500) { onLeave(); onReturn(); }
     lastLoop = now;
+    if (codeOpen && job && playing) {
+      const cur = job.line[curMove];
+      if (cur !== codeLastCur) { codeLastCur = cur; codeFollowTo(false); renderCode(); }
+    }
     stepCodeScroll();
     if (playing && job) {
       const dt = Math.min(0.25, (now - lastFrame) / 1000); lastFrame = now;

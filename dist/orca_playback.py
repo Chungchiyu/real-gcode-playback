@@ -5,12 +5,15 @@
 # name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
-# version = "1.2.0"
+# version = "1.2.1"
 # ///
 """Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
+1.2.1 (2026-10-09)
+  - G-code panel keeps the running line centred while playing
+  - G-code panel button moved to the front of the current line
 1.2.0 (2026-10-09)
   - G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment
 1.1.1 (2026-10-09)
@@ -82,8 +85,16 @@ SETUP_HINT = {
 }
 
 CHANGELOG = {
- "version": "1.2.0",
+ "version": "1.2.1",
  "entries": [
+  {
+   "version": "1.2.1",
+   "date": "2026-10-09",
+   "changes": [
+    "G-code panel keeps the running line centred while playing",
+    "G-code panel button moved to the front of the current line"
+   ]
+  },
   {
    "version": "1.2.0",
    "date": "2026-10-09",
@@ -339,9 +350,9 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         <tr><td>Remaining</td><td class="v" id="hRemain">–</td></tr>
       </table>
       <div class="srcRow">
-        <div class="src" id="hSrc"></div>
         <button class="icon" id="codeToggle" aria-expanded="false" aria-controls="codePanel" title="Show the G-code (G)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+        <div class="src" id="hSrc"></div>
       </div>
       <div id="codePanel" aria-hidden="true">
         <div class="codeHead">
@@ -448,7 +459,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>window.PLAYBACK_ABOUT = {"version": "1.2.0", "entries": [{"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+<script>window.PLAYBACK_ABOUT = {"version": "1.2.1", "entries": [{"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
 /* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
@@ -1575,7 +1586,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     $('hSrc').textContent = sourceLine(job.line[k]);
     if (codeOpen) {
       const cur = job.line[k];
-      if (cur !== codeLastCur) { codeLastCur = cur; codeFollowTo(true); renderCode(); }
+      if (cur !== codeLastCur) { codeLastCur = cur; codeFollowTo(!playing); renderCode(); }
     }
     // bottom bar
     $('cTime').textContent = fmtTime(simT); $('cTotal').textContent = fmtTime(job.total);
@@ -1611,7 +1622,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   function codeCount() { return ensureLineStarts() ? lineStarts.length : 0; }
   function codeGeom() {
     const n = codeCount(), view = codeScroll.clientHeight || 288;
-    const realH = n * ROW, H = Math.min(realH, MAX_SCROLL_H), vis = Math.ceil(view / ROW);
+    const realH = n * ROW, H = Math.min(realH, MAX_SCROLL_H), vis = Math.floor(view / ROW);
     return { n, view, H, scaled: realH > MAX_SCROLL_H, vis };
   }
   function firstLineAt(top, g) {      // 0-based index of the first row shown for a scrollTop
@@ -1641,7 +1652,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     const offset = g.scaled ? top : first * ROW;
     const cur = job.line[curMove] || 0;
     let html = '';
-    for (let i = first; i < Math.min(g.n, first + g.vis + 2); i++) {
+    for (let i = first; i < Math.min(g.n, first + g.vis + 3); i++) {
       const no = i + 1;
       html += '<div class="ln' + (no === cur ? ' cur' : no < cur ? ' past' : '') + (no === flashLine && performance.now() < flashUntil ? ' flash' : '') + '" data-line="' + no + '"><span class="no">' + no +
               '</span><span class="tx">' + highlight(lineText(no, 220)) + '</span></div>';
@@ -1650,11 +1661,14 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     codeRows.innerHTML = html;
     $('codeInfo').textContent = 'Line ' + (cur || '–') + ' of ' + g.n.toLocaleString();
   }
+  /* Following keeps the running line pinned to the middle row. While playing it moves straight
+     there (an eased glide falls behind at high speeds and the highlight drifts out of view);
+     the glide is only used for one-off jumps, such as pressing Follow. */
   function codeFollowTo(animate) {
     if (!codeOpen || !codeFollow || !job) return;
     const g = codeGeom(), cur = (job.line[curMove] || 1) - 1;
-    const target = scrollTopFor(cur - Math.floor(g.vis / 2), g);
-    if (!animate || Math.abs(target - codeScroll.scrollTop) > g.view * 40) { setCodeScroll(target); codeTarget = null; }
+    const target = scrollTopFor(cur - Math.floor((g.vis - 1) / 2), g);
+    if (!animate || playing || Math.abs(target - codeScroll.scrollTop) > g.view * 40) { setCodeScroll(target); codeTarget = null; }
     else codeTarget = target;
   }
   function setCodeScroll(v) { codeScroll.scrollTop = v; renderCode(); }
@@ -1945,6 +1959,10 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     requestAnimationFrame(loop);
     if (lastLoop && now - lastLoop > 1500) { onLeave(); onReturn(); }
     lastLoop = now;
+    if (codeOpen && job && playing) {
+      const cur = job.line[curMove];
+      if (cur !== codeLastCur) { codeLastCur = cur; codeFollowTo(false); renderCode(); }
+    }
     stepCodeScroll();
     if (playing && job) {
       const dt = Math.min(0.25, (now - lastFrame) / 1000); lastFrame = now;

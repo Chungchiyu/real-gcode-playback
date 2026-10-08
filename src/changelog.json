@@ -1,6 +1,14 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.1",
   "entries": [
+    {
+      "version": "1.2.1",
+      "date": "2026-10-09",
+      "changes": [
+        "G-code panel keeps the running line centred while playing",
+        "G-code panel button moved to the front of the current line"
+      ]
+    },
     {
       "version": "1.2.0",
       "date": "2026-10-09",
