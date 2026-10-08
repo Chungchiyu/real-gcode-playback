@@ -8,7 +8,7 @@
 
   /* ------------------------------------------------------------------ preferences */
   const DEFAULT_PREFS = { speed: 10, color: 'feature', travel: false, layerOnly: false, follow: false,
-                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube' };
+                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube', flags: {} };
   let prefs = Object.assign({}, DEFAULT_PREFS);
   try { Object.assign(prefs, JSON.parse(localStorage.getItem('orca-playback-prefs') || '{}')); } catch (e) { /* storage may be off */ }
   let prefTimer = 0;
@@ -213,12 +213,13 @@
   function buildPaths() {
     const n = job.moves, F = job.flags, P = job.pts;
     let segs = 0, travels = 0;
-    for (let k = 0; k < n; k++) { if (F[k] & C.FL_EXTRUDE) segs++; else if (F[k] & C.FL_TRAVEL) travels++; }
+    for (let k = 0; k < n; k++) { if (F[k] & C.FL_SKIP) continue; if (F[k] & C.FL_EXTRUDE) segs++; else if (F[k] & C.FL_TRAVEL) travels++; }
     const segMove = new Uint32Array(segs), extPrefix = new Uint32Array(n + 1), travelPrefix = new Uint32Array(n + 1);
     const pos = new Float32Array(segs * 6), tpos = new Float32Array(Math.max(1, travels) * 6);
     let s = 0, tr = 0;
     for (let k = 0; k < n; k++) {
       extPrefix[k] = s; travelPrefix[k] = tr;
+      if (F[k] & C.FL_SKIP) continue;               // blocks the printer won't run are not drawn
       if (F[k] & C.FL_EXTRUDE) {
         segMove[s] = k;
         pos.set(P.subarray(k * 3, k * 3 + 6), s * 6);
@@ -335,7 +336,7 @@
   }
 
   /* ------------------------------------------------------------------ playback state */
-  let job = null, gcodeText = null, lineStarts = null;
+  let job = null, gcodeText = null, lineStarts = null, currentMeta = {};
   let simT = 0, playing = false, lastFrame = 0, lastShown = -1, dirty = true;
   let curMove = 0;
   let hudTimer = 0;
@@ -753,6 +754,30 @@
       e.changes.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>').join('');
     $('logLink').onclick = (ev) => { ev.preventDefault(); $('changelog').hidden = !$('changelog').hidden; };
   })();
+  /* Print options found in this G-code (Bambu conditional blocks). Changing one re-reads the file
+     with the new choice and keeps the playback position. */
+  function renderFlags() {
+    const box = $('flagList');
+    const found = job && job.flagsFound ? job.flagsFound : [];
+    box.hidden = !found.length;
+    if (!found.length) { box.innerHTML = ''; return; }
+    const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    box.innerHTML = '<div class="flagHead">Print options in this G-code</div>' + found.map(f =>
+      '<label class="check" title="' + esc(f.name) + '"><input type="checkbox" data-flag="' + esc(f.name) + '"' + (f.value ? ' checked' : '') + '> ' +
+      esc(f.label) + (f.count > 1 ? ' <span class="muted">×' + f.count + '</span>' : '') + '</label>').join('') +
+      '<div class="flagNote">Choose them as you will when sending the print. Heating time is not counted.</div>';
+    box.querySelectorAll('input[data-flag]').forEach(inp => inp.onchange = () => {
+      prefs.flags = Object.assign({}, prefs.flags, { [inp.dataset.flag]: inp.checked }); savePrefs();
+      reparse();
+    });
+  }
+  async function reparse() {
+    if (!job || !gcodeText) return;
+    const frac = simT / Math.max(1e-9, job.total), wasPlaying = playing, before = job.total;
+    await loadText(gcodeText, Object.assign({}, currentMeta, { keepFrac: frac, keepView: true }));
+    if (job) toast('Print time ' + (job.total < before ? '−' : '+') + fmtLong(Math.abs(job.total - before)) + ' → ' + fmtLong(job.total));
+    if (wasPlaying) setPlaying(true);
+  }
   $('headChk').onchange = () => { prefs.head = $('headChk').checked; headGroup.visible = prefs.head; savePrefs(); dirty = true; };
   $('gantryChk').onchange = () => { prefs.gantry = $('gantryChk').checked; gantry.visible = prefs.gantry; savePrefs(); dirty = true; };
   $('shadeSel').onchange = () => { prefs.shade = $('shadeSel').value; savePrefs(); recolor(); };
@@ -854,14 +879,14 @@
     busy('Reading G-code…', 0); await nextFrame();
     let parsed;
     try {
-      parsed = C.parseGcode(text, { progress: (f) => { $('busyBar').style.width = Math.round(f * 85) + '%'; } });
+      parsed = C.parseGcode(text, { flags: prefs.flags || {}, progress: (f) => { $('busyBar').style.width = Math.round(f * 85) + '%'; } });
       busy('Planning motion…', 0.88); await nextFrame();
       C.planJob(parsed, { align: prefs.timing === 'aligned' });
     } catch (err) {
       busy(null); toast('Could not read this G-code: ' + err.message, true); console.error(err); return false;
     }
     if (parsed.moves < 2) { busy(null); toast('No moves found in this file.', true); return false; }
-    job = parsed; gcodeText = text; lineStarts = null; codeLastCur = -1;
+    job = parsed; gcodeText = text; lineStarts = null; codeLastCur = -1; currentMeta = meta;
     if (codeOpen) { codeScroll.scrollTop = 0; }
     busy('Building paths…', 0.95); await nextFrame();
     for (const k in featVisible) delete featVisible[k];
@@ -877,8 +902,9 @@
     describeTiming();
     if (R.segMove.length > 1200000 && prefs.lines === 'fat')
       setTimeout(() => toast('Large print (' + Math.round(R.segMove.length / 1e5) / 10 + 'M lines). If playback stutters, use Options → Line style → Thin lines.'), 400);
-    simT = meta.keepTime != null ? Math.min(meta.keepTime, job.total) : 0;
-    frame(meta.keepView ? null : 'iso');
+    simT = meta.keepFrac != null ? meta.keepFrac * job.total : meta.keepTime != null ? Math.min(meta.keepTime, job.total) : 0;
+    if (!meta.keepView) frame('iso');
+    renderFlags();
     updateScene(true); updateHud();
     busy(null);
     return true;
@@ -886,7 +912,8 @@
   function describeTiming() {
     const b = $('timingBadge'); b.hidden = false;
     if (job.aligned) {
-      b.className = 'badge ok'; b.textContent = 'Synced to slicer · ' + fmtLong(job.total);
+      const adjusted = Math.abs(job.total - job.estimate) > 1;
+      b.className = 'badge ok'; b.textContent = (adjusted ? 'Synced to slicer, adjusted for print options · ' : 'Synced to slicer · ') + fmtLong(job.total);
       b.title = 'Total time matches the slicer estimate (' + fmtLong(job.estimate) + '); the motion planner fills in the timing between its progress markers. Planner alone: ' + fmtLong(job.plannerTotal) + '.';
     } else {
       b.className = 'badge'; b.textContent = 'Planner estimate · ' + fmtLong(job.total);

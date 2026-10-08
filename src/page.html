@@ -128,6 +128,11 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
 #optPanel label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--muted); }
 #optPanel label.check { flex-direction: row; align-items: center; gap: 7px; color: var(--fg); font-size: 12px; }
 #optPanel select { width: 100%; }
+#optPanel { max-height: calc(100% - 20px); overflow-y: auto; }
+#flagList { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 8px 0; }
+#flagList[hidden] { display: none; }
+#flagList .flagHead { font-size: 11.5px; color: var(--muted); }
+#flagList .flagNote { font-size: 10.5px; color: var(--muted); }
 #optPanel .about { border-top: 1px solid var(--border); padding-top: 8px; font-size: 11.5px; color: var(--muted); }
 #optPanel .about a { color: var(--accent); text-decoration: none; }
 #changelog { max-height: 260px; overflow: auto; font-size: 11.5px; }
@@ -274,6 +279,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
           <option value="height">Height shading</option>
           <option value="flat">Flat colours</option>
         </select></label>
+      <div id="flagList" hidden></div>
       <label class="check"><input type="checkbox" id="headChk"> Show the hot end</label>
       <label class="check"><input type="checkbox" id="gantryChk"> Show the gantry</label>
       <div class="about"><span id="verText">Playback</span> · <a href="#" id="logLink">What's new</a></div>

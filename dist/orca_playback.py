@@ -5,12 +5,15 @@
 # name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
-# version = "1.2.1"
+# version = "1.3.0"
 # ///
 """Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
+1.3.0 (2026-10-09)
+  - Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed
+  - Bed leveling counts as 260 s, as in OrcaSlicer's estimate
 1.2.1 (2026-10-09)
   - G-code panel keeps the running line centred while playing
   - G-code panel button moved to the front of the current line
@@ -73,7 +76,7 @@ CHUNK_CHARS = 384 * 1024            # per message; each is one RunScript call in
 CAPTURE_NAME = "Playback capture"
 
 DEFAULT_PREFS = {"speed": 10, "color": "feature", "travel": False, "layerOnly": False, "follow": False,
-                 "motion": "auto", "lines": "fat", "timing": "aligned", "head": True, "gantry": True, "shade": "tube"}
+                 "motion": "auto", "lines": "fat", "timing": "aligned", "head": True, "gantry": True, "shade": "tube", "flags": {}}
 
 SETUP_HINT = {
     "title": "One-time setup for automatic loading",
@@ -85,8 +88,16 @@ SETUP_HINT = {
 }
 
 CHANGELOG = {
- "version": "1.2.1",
+ "version": "1.3.0",
  "entries": [
+  {
+   "version": "1.3.0",
+   "date": "2026-10-09",
+   "changes": [
+    "Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed",
+    "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"
+   ]
+  },
   {
    "version": "1.2.1",
    "date": "2026-10-09",
@@ -276,6 +287,11 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
 #optPanel label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--muted); }
 #optPanel label.check { flex-direction: row; align-items: center; gap: 7px; color: var(--fg); font-size: 12px; }
 #optPanel select { width: 100%; }
+#optPanel { max-height: calc(100% - 20px); overflow-y: auto; }
+#flagList { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 8px 0; }
+#flagList[hidden] { display: none; }
+#flagList .flagHead { font-size: 11.5px; color: var(--muted); }
+#flagList .flagNote { font-size: 10.5px; color: var(--muted); }
 #optPanel .about { border-top: 1px solid var(--border); padding-top: 8px; font-size: 11.5px; color: var(--muted); }
 #optPanel .about a { color: var(--accent); text-decoration: none; }
 #changelog { max-height: 260px; overflow: auto; font-size: 11.5px; }
@@ -422,6 +438,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
           <option value="height">Height shading</option>
           <option value="flat">Flat colours</option>
         </select></label>
+      <div id="flagList" hidden></div>
       <label class="check"><input type="checkbox" id="headChk"> Show the hot end</label>
       <label class="check"><input type="checkbox" id="gantryChk"> Show the gantry</label>
       <div class="about"><span id="verText">Playback</span> · <a href="#" id="logLink">What's new</a></div>
@@ -459,7 +476,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>window.PLAYBACK_ABOUT = {"version": "1.2.1", "entries": [{"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+<script>window.PLAYBACK_ABOUT = {"version": "1.3.0", "entries": [{"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
 /* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
@@ -491,7 +508,23 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 (function (root) {
   'use strict';
 
-  const FL_EXTRUDE = 1, FL_TRAVEL = 2, FL_EONLY = 4, FL_DWELL = 8, FL_ARC = 16, FL_STOP = 32;
+  const FL_EXTRUDE = 1, FL_TRAVEL = 2, FL_EONLY = 4, FL_DWELL = 8, FL_ARC = 16, FL_STOP = 32, FL_SKIP = 64;
+
+  /* Bambu-style conditional blocks: `M1002 judge_flag NAME` + `M622 J1|J0` … `M623`. The printer decides
+     at print time from the options chosen when sending; the viewer lets the user choose instead.
+     Defaults follow the usual send-dialog choices; anything else uses the file's own M622.1 default. */
+  const FLAG_INFO = {
+    g29_before_print_flag: { label: 'Bed leveling', def: true },
+    extrude_cali_flag: { label: 'Flow dynamics calibration', def: true },
+    timelapse_record_flag: { label: 'Timelapse', def: false },
+    build_plate_detect_flag: { label: 'Build plate detection', def: true },
+    g39_3rd_layer_detect_flag: { label: 'Nozzle clumping detection (layer 3)' },
+    g39_detection_flag: { label: 'Nozzle clumping detection' },
+    g39_mass_exceed_flag: { label: 'Clumping check: mass exceeded' },
+    filament_need_cali_flag: { label: 'Calibrate after filament change' },
+    last_extrude_cali_success: { label: 'Last flow calibration succeeded', def: true },
+  };
+  function flagLabel(name) { return (FLAG_INFO[name] && FLAG_INFO[name].label) || name.replace(/_flag$/, '').replace(/_/g, ' '); }
 
   // Canonical features. Colours follow OrcaSlicer's preview defaults so the two views read alike.
   const FEATURES = [
@@ -596,6 +629,40 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     let lastExtrudeZ = -1e9, lastExtrudeMove = 0;
     if (haveLayerComments) layers.push({ z: 0, h: 0, first: 0, start: true });   // start G-code, before layer 1
     let pendingStop = false;                     // a blocking command happened since the last move
+    // conditional blocks
+    const flagChoices = opts.flags || {};
+    const flagsFound = {};                       // name -> { name, label, value, fileDefault, count }
+    const blockStack = [];                       // true = this block runs
+    let judged = true, nextDefault = null, skipping = false, saved = null, g29Window = false, skippedMoves = 0;
+    const isBambu = text.indexOf('M1002 ') >= 0 || text.indexOf('M622 ') >= 0;
+    function judge(name) {
+      let def = nextDefault != null ? nextDefault : (FLAG_INFO[name] && FLAG_INFO[name].def != null ? FLAG_INFO[name].def : true);
+      if (FLAG_INFO[name] && FLAG_INFO[name].def != null) def = FLAG_INFO[name].def;
+      const value = name in flagChoices ? !!flagChoices[name] : def;
+      const f = flagsFound[name] || (flagsFound[name] = { name, label: flagLabel(name), value, fileDefault: def, count: 0 });
+      f.count++;
+      nextDefault = null; judged = value;
+    }
+    function updateSkipping() {
+      const now = blockStack.some(b => !b);
+      if (now && !skipping) {
+        // entering a block the printer will not run: remember the real machine state
+        saved = { x, y, z, e, ox, oy, oz, absXYZ, absE, fmm, accPrint, accTravel, accRetract, curFeat, curTool,
+                  px: P.a[n * 3], py: P.a[n * 3 + 1], pz: P.a[n * 3 + 2] };
+        pendingStop = true;
+      } else if (!now && skipping && saved) {
+        // leaving it: put the head back where it really is (a zero-time, undrawn hop)
+        const hx = P.a[n * 3], hy = P.a[n * 3 + 1], hz = P.a[n * 3 + 2];
+        if (hx !== saved.px || hy !== saved.py || hz !== saved.pz) {
+          const L = Math.hypot(saved.px - hx, saved.py - hy, saved.pz - hz);
+          skipping = true; push(saved.px, saved.py, saved.pz, FL_TRAVEL, 0, fmm, L, 0, lineNo);
+        }
+        ({ x, y, z, e, ox, oy, oz, absXYZ, absE, fmm, accPrint, accTravel, accRetract, curFeat, curTool } = saved);
+        saved = null; pendingStop = true;
+      }
+      skipping = now;
+    }
+    function addEvent(ev) { if (!skipping) events.push(ev); }
     const machineCmd = {};                       // limits set by M201/M203/M205/SET_VELOCITY_LIMIT
 
     P.ensure(3); P.a[0] = 0; P.a[1] = 0; P.a[2] = 0;
@@ -606,6 +673,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       P.ensure((n + 2) * 3);
       const p = (n + 1) * 3; P.a[p] = nx; P.a[p + 1] = ny; P.a[p + 2] = nz;
       if (pendingStop) { flags |= FL_STOP; pendingStop = false; }
+      if (skipping) { flags |= FL_SKIP; skippedMoves++; }
       G.flags.a[n] = flags; G.feat.a[n] = curFeat; G.layer.a[n] = curLayer < 0 ? 0 : curLayer;
       G.tool.a[n] = curTool; G.fcmd.a[n] = fcmd; G.len.a[n] = length; G.de.a[n] = dE;
       G.acc.a[n] = (flags & FL_EXTRUDE) ? accPrint : (flags & FL_EONLY) ? (accRetract || accPrint) : (accTravel || accPrint);
@@ -630,8 +698,10 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       if (arcFlag) fl |= FL_ARC;
       if (fl & FL_EXTRUDE) {
         // a layer is wherever extrusion happens at a new height, when the slicer gave us no markers
-        if (!haveLayerComments && tz > lastExtrudeZ + 0.015) { startLayer(tz, layers.length ? tz - lastExtrudeZ : tz); }
-        lastExtrudeZ = Math.max(lastExtrudeZ, tz); lastExtrudeMove = n + 1;
+        if (!skipping) {
+          if (!haveLayerComments && tz > lastExtrudeZ + 0.015) { startLayer(tz, layers.length ? tz - lastExtrudeZ : tz); }
+          lastExtrudeZ = Math.max(lastExtrudeZ, tz); lastExtrudeMove = n + 1;
+        }
       }
       push(tx, ty, tz, fl, dE, fmm, L, 0, lineNo);
     }
@@ -696,7 +766,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
           if ((m = /ACCEL=([\d.]+)/.exec(up))) { accPrint = accTravel = parseFloat(m[1]); }
           if ((m = /SQUARE_CORNER_VELOCITY=([\d.]+)/.exec(up))) machineCmd.scv = parseFloat(m[1]);
           if ((m = /\bVELOCITY=([\d.]+)/.exec(up))) machineCmd.vmax = parseFloat(m[1]);
-        } else if (up.startsWith('PAUSE')) { events.push({ move: n, kind: 'pause', label: 'Pause' }); pendingStop = true; }
+        } else if (up.startsWith('PAUSE')) { addEvent({ move: n, kind: 'pause', label: 'Pause' }); pendingStop = true; }
         continue;
       }
 
@@ -740,6 +810,10 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
             linearMove(tx + ox, ty + oy, tz + oz, dE, lineNo, false);
           }
           x = tx; y = ty; z = tz; e = te;
+        } else if (g === 29 && isBambu && g29Window) {
+          // bed leveling: no moves in the G-code; OrcaSlicer budgets 260 s for it on Bambu printers
+          push(phys(0), phys(1), phys(2), FL_DWELL, 0, 0, 0, 260, lineNo);
+          pendingStop = true;
         } else if (g === 4) {
           let s = 0;
           if (!isNaN(word.P)) s = word.P / 1000; else if (!isNaN(word.S)) s = word.S;
@@ -762,6 +836,22 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         }
       } else if (cmdLetter === 'M') {
         const mm = cmdNum;
+        if (mm === 1002) {
+          const m = /judge_flag\s+([A-Za-z0-9_]+)/.exec(trimmed);
+          if (m) judge(m[1]);
+          else if (/judge_last_extrude_cali_success/.test(trimmed)) judge('last_extrude_cali_success');
+          continue;
+        }
+        if (mm === 622.1) { if (!isNaN(word.S)) nextDefault = word.S >= 0.5; continue; }
+        if (mm === 622) {
+          const want = !isNaN(word.J) ? word.J : !isNaN(word.S) ? word.S : 1;
+          const runs = judged === (want >= 0.5);
+          blockStack.push(runs && !skipping);
+          if (want >= 0.5) g29Window = true;       // OrcaSlicer times G29 only inside "M622 J1" blocks
+          updateSkipping();
+          continue;
+        }
+        if (mm === 623) { blockStack.pop(); g29Window = false; updateSkipping(); continue; }
         if (mm === 82) absE = true;
         else if (mm === 83) absE = false;
         else if (mm === 204) {
@@ -788,15 +878,15 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
           if (s > 0) push(phys(0), phys(1), phys(2), FL_DWELL, 0, 0, 0, s, lineNo);
           pendingStop = true;
         } else if (mm === 109 || mm === 190 || mm === 191) {
-          events.push({ move: n, kind: 'heat', label: (mm === 190 ? 'Wait for bed ' : 'Wait for nozzle ') + (isNaN(word.S) ? '' : word.S + '°C') });
+          addEvent({ move: n, kind: 'heat', label: (mm === 190 ? 'Wait for bed ' : 'Wait for nozzle ') + (isNaN(word.S) ? '' : word.S + '°C') });
           pendingStop = true;
         } else if (mm === 600 || mm === 601 || mm === 0 || mm === 1 || mm === 25 || mm === 226) {
-          events.push({ move: n, kind: 'pause', label: mm === 600 ? 'Filament change (M600)' : 'Pause' });
+          addEvent({ move: n, kind: 'pause', label: mm === 600 ? 'Filament change (M600)' : 'Pause' });
           pendingStop = true;
         } else if (mm === 620 && !isNaN(word.S)) {
           // Bambu AMS: "M620 S1A" announces a filament change to slot 1
           const slot = word.S;
-          if (slot < 255) events.push({ move: n, kind: 'tool', label: 'Filament change → slot ' + (slot + 1), tool: slot });
+          if (slot < 255) addEvent({ move: n, kind: 'tool', label: 'Filament change → slot ' + (slot + 1), tool: slot });
           pendingStop = true;
         }
       } else if (cmdLetter === 'T') {
@@ -805,7 +895,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
             const prev = curTool; curTool = cmdNum | 0;
             const last = events[events.length - 1];
             // Bambu announces the change with M620 first; don't list the same change twice
-            if (!(last && last.kind === 'tool' && last.move >= lastExtrudeMove)) events.push({ move: n, kind: 'tool', label: 'Tool ' + prev + ' → ' + curTool, tool: curTool });
+            if (!(last && last.kind === 'tool' && last.move >= lastExtrudeMove)) addEvent({ move: n, kind: 'tool', label: 'Tool ' + prev + ' → ' + curTool, tool: curTool });
             else last.tool = curTool;
           }
           pendingStop = true;
@@ -840,6 +930,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     if (progress) progress(1);
     if (!layers.length) layers.push({ z: 0, h: 0, first: 0 });
 
+    while (blockStack.length) blockStack.pop();
+    if (skipping) updateSkipping();
     const job = {
       moves: n, pts: P.out((n + 1) * 3),
       flags: G.flags.out(n), feat: G.feat.out(n), layer: G.layer.out(n), tool: G.tool.out(n),
@@ -856,6 +948,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         job.acc[k] = (f & FL_EXTRUDE) ? m.accDefault : (f & FL_EONLY) ? m.accRetract : m.accTravel;
       }
     }
+    job.flagsFound = Object.values(flagsFound);
+    job.skippedMoves = skippedMoves;
     job.bed = resolveBed(job);
     return job;
   }
@@ -902,7 +996,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     let minX = 1e9, minY = 1e9, minZ = 1e9, maxX = -1e9, maxY = -1e9, maxZ = -1e9;
     const P = job.pts, F = job.flags;
     for (let k = 0; k < job.moves; k++) {
-      if (!(F[k] & FL_EXTRUDE)) continue;
+      if (!(F[k] & FL_EXTRUDE) || (F[k] & FL_SKIP)) continue;
       for (const q of [k, k + 1]) {
         const xx = P[q * 3], yy = P[q * 3 + 1], zz = P[q * 3 + 2];
         if (xx < minX) minX = xx; if (xx > maxX) maxX = xx;
@@ -1048,20 +1142,28 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
      The slicer simulates the firmware more faithfully than any viewer can, so when it left markers
      we trust its clock and only use our planner for what happens *between* the markers. */
   function applyTiming(job, align) {
-    const n = job.moves, t0p = job.plannerT0, dp = job.plannerDur;
+    const n = job.moves, t0p = job.plannerT0, dp = job.plannerDur, F = job.flags;
+    /* Only motion is stretched to fit the estimate. Fixed waits (G4, M400 S/P, the G29 budget) last
+       exactly what they say in both clocks, so they are taken out of both sides before mapping. */
+    const fixedBefore = new Float64Array(n + 1);          // fixed-wait time before move k (planner clock)
+    for (let k = 0; k < n; k++) fixedBefore[k + 1] = fixedBefore[k] + ((F[k] & FL_DWELL) ? dp[k] : 0);
+    const fixedTotal = fixedBefore[n];
+    const motionAt = (k) => (k < n ? t0p[k] : job.plannerTotal) - fixedBefore[Math.min(k, n)];
+    const motionTotal = job.plannerTotal - fixedTotal, targetMotion = job.estimate - fixedTotal;
     const knotsA = [0], knotsB = [0];
-    let usable = align && job.estimate > 0 && job.m73.length >= 3;
+    let usable = align && job.estimate > 0 && job.m73.length >= 3 && motionTotal > 0 && targetMotion > 0;
     if (usable) {
       let lastP = -1;
       for (const mk of job.m73) {
         if (mk.p <= lastP || mk.p <= 0 || mk.p >= 100) continue;
-        const ta = mk.move < n ? t0p[mk.move] : job.plannerTotal;
-        if (ta <= knotsA[knotsA.length - 1] + 1e-6) continue;
-        knotsA.push(ta); knotsB.push(job.estimate * mk.p / 100); lastP = mk.p;
+        const ta = motionAt(mk.move);
+        const tb = job.estimate * mk.p / 100 - fixedBefore[Math.min(mk.move, n)];
+        if (ta <= knotsA[knotsA.length - 1] + 1e-6 || tb <= knotsB[knotsB.length - 1] + 1e-6) continue;
+        knotsA.push(ta); knotsB.push(tb); lastP = mk.p;
       }
-      knotsA.push(job.plannerTotal); knotsB.push(job.estimate);
+      knotsA.push(motionTotal); knotsB.push(Math.max(targetMotion, knotsB[knotsB.length - 1] + 1e-3));
       // sanity: wildly different totals mean the markers belong to some other clock (e.g. silent mode)
-      const ratio = job.estimate / Math.max(1, job.plannerTotal);
+      const ratio = targetMotion / motionTotal;
       if (knotsA.length < 4 || ratio < 0.3 || ratio > 3) usable = false;
     }
     const t0 = new Float64Array(n), dur = new Float32Array(n);
@@ -1075,13 +1177,24 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         const a0 = knotsA[seg], a1 = knotsA[seg + 1], b0 = knotsB[seg], b1 = knotsB[seg + 1];
         return b0 + (b1 - b0) * (a1 > a0 ? (ta - a0) / (a1 - a0) : 0);
       };
+      let t = 0;
       for (let k = 0; k < n; k++) {
-        const s = map(t0p[k]);
-        t0[k] = s;
-        if (k > 0) dur[k - 1] = Math.max(0, s - t0[k - 1]);
+        t0[k] = t;
+        if (F[k] & FL_DWELL) { dur[k] = dp[k]; }
+        else { const a = motionAt(k); dur[k] = Math.max(0, map(a + dp[k]) - map(a)); }
+        t += dur[k];
       }
-      if (n) dur[n - 1] = Math.max(0, job.estimate - t0[n - 1]);
-      job.total = job.estimate; job.aligned = true;
+      job.total = t; job.aligned = true;
+    }
+    // blocks the printer won't run still count toward the slicer's estimate (it times every line),
+    // so they are aligned like everything else and only then taken out of the clock
+    if (job.skippedMoves) {
+      let t = 0;
+      for (let k = 0; k < n; k++) {
+        if (job.flags[k] & FL_SKIP) dur[k] = 0;
+        t0[k] = t; t += dur[k];
+      }
+      job.total = t;
     }
     job.t0 = t0; job.dur = dur;
     // layer timing
@@ -1122,7 +1235,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   }
 
   const api = { parseGcode, planJob, applyTiming, moveAt, stateIn, FEATURES, featureId, parseDuration,
-                FL_EXTRUDE, FL_TRAVEL, FL_EONLY, FL_DWELL, FL_ARC, FL_STOP };
+                FL_EXTRUDE, FL_TRAVEL, FL_EONLY, FL_DWELL, FL_ARC, FL_STOP, FL_SKIP, FLAG_INFO, flagLabel };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PlaybackCore = api;
 })(typeof self !== 'undefined' ? self : this);
@@ -1137,7 +1250,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 
   /* ------------------------------------------------------------------ preferences */
   const DEFAULT_PREFS = { speed: 10, color: 'feature', travel: false, layerOnly: false, follow: false,
-                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube' };
+                          motion: 'auto', lines: 'fat', timing: 'aligned', head: true, gantry: true, shade: 'tube', flags: {} };
   let prefs = Object.assign({}, DEFAULT_PREFS);
   try { Object.assign(prefs, JSON.parse(localStorage.getItem('orca-playback-prefs') || '{}')); } catch (e) { /* storage may be off */ }
   let prefTimer = 0;
@@ -1342,12 +1455,13 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   function buildPaths() {
     const n = job.moves, F = job.flags, P = job.pts;
     let segs = 0, travels = 0;
-    for (let k = 0; k < n; k++) { if (F[k] & C.FL_EXTRUDE) segs++; else if (F[k] & C.FL_TRAVEL) travels++; }
+    for (let k = 0; k < n; k++) { if (F[k] & C.FL_SKIP) continue; if (F[k] & C.FL_EXTRUDE) segs++; else if (F[k] & C.FL_TRAVEL) travels++; }
     const segMove = new Uint32Array(segs), extPrefix = new Uint32Array(n + 1), travelPrefix = new Uint32Array(n + 1);
     const pos = new Float32Array(segs * 6), tpos = new Float32Array(Math.max(1, travels) * 6);
     let s = 0, tr = 0;
     for (let k = 0; k < n; k++) {
       extPrefix[k] = s; travelPrefix[k] = tr;
+      if (F[k] & C.FL_SKIP) continue;               // blocks the printer won't run are not drawn
       if (F[k] & C.FL_EXTRUDE) {
         segMove[s] = k;
         pos.set(P.subarray(k * 3, k * 3 + 6), s * 6);
@@ -1464,7 +1578,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   }
 
   /* ------------------------------------------------------------------ playback state */
-  let job = null, gcodeText = null, lineStarts = null;
+  let job = null, gcodeText = null, lineStarts = null, currentMeta = {};
   let simT = 0, playing = false, lastFrame = 0, lastShown = -1, dirty = true;
   let curMove = 0;
   let hudTimer = 0;
@@ -1882,6 +1996,30 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       e.changes.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>').join('');
     $('logLink').onclick = (ev) => { ev.preventDefault(); $('changelog').hidden = !$('changelog').hidden; };
   })();
+  /* Print options found in this G-code (Bambu conditional blocks). Changing one re-reads the file
+     with the new choice and keeps the playback position. */
+  function renderFlags() {
+    const box = $('flagList');
+    const found = job && job.flagsFound ? job.flagsFound : [];
+    box.hidden = !found.length;
+    if (!found.length) { box.innerHTML = ''; return; }
+    const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    box.innerHTML = '<div class="flagHead">Print options in this G-code</div>' + found.map(f =>
+      '<label class="check" title="' + esc(f.name) + '"><input type="checkbox" data-flag="' + esc(f.name) + '"' + (f.value ? ' checked' : '') + '> ' +
+      esc(f.label) + (f.count > 1 ? ' <span class="muted">×' + f.count + '</span>' : '') + '</label>').join('') +
+      '<div class="flagNote">Choose them as you will when sending the print. Heating time is not counted.</div>';
+    box.querySelectorAll('input[data-flag]').forEach(inp => inp.onchange = () => {
+      prefs.flags = Object.assign({}, prefs.flags, { [inp.dataset.flag]: inp.checked }); savePrefs();
+      reparse();
+    });
+  }
+  async function reparse() {
+    if (!job || !gcodeText) return;
+    const frac = simT / Math.max(1e-9, job.total), wasPlaying = playing, before = job.total;
+    await loadText(gcodeText, Object.assign({}, currentMeta, { keepFrac: frac, keepView: true }));
+    if (job) toast('Print time ' + (job.total < before ? '−' : '+') + fmtLong(Math.abs(job.total - before)) + ' → ' + fmtLong(job.total));
+    if (wasPlaying) setPlaying(true);
+  }
   $('headChk').onchange = () => { prefs.head = $('headChk').checked; headGroup.visible = prefs.head; savePrefs(); dirty = true; };
   $('gantryChk').onchange = () => { prefs.gantry = $('gantryChk').checked; gantry.visible = prefs.gantry; savePrefs(); dirty = true; };
   $('shadeSel').onchange = () => { prefs.shade = $('shadeSel').value; savePrefs(); recolor(); };
@@ -1983,14 +2121,14 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     busy('Reading G-code…', 0); await nextFrame();
     let parsed;
     try {
-      parsed = C.parseGcode(text, { progress: (f) => { $('busyBar').style.width = Math.round(f * 85) + '%'; } });
+      parsed = C.parseGcode(text, { flags: prefs.flags || {}, progress: (f) => { $('busyBar').style.width = Math.round(f * 85) + '%'; } });
       busy('Planning motion…', 0.88); await nextFrame();
       C.planJob(parsed, { align: prefs.timing === 'aligned' });
     } catch (err) {
       busy(null); toast('Could not read this G-code: ' + err.message, true); console.error(err); return false;
     }
     if (parsed.moves < 2) { busy(null); toast('No moves found in this file.', true); return false; }
-    job = parsed; gcodeText = text; lineStarts = null; codeLastCur = -1;
+    job = parsed; gcodeText = text; lineStarts = null; codeLastCur = -1; currentMeta = meta;
     if (codeOpen) { codeScroll.scrollTop = 0; }
     busy('Building paths…', 0.95); await nextFrame();
     for (const k in featVisible) delete featVisible[k];
@@ -2006,8 +2144,9 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     describeTiming();
     if (R.segMove.length > 1200000 && prefs.lines === 'fat')
       setTimeout(() => toast('Large print (' + Math.round(R.segMove.length / 1e5) / 10 + 'M lines). If playback stutters, use Options → Line style → Thin lines.'), 400);
-    simT = meta.keepTime != null ? Math.min(meta.keepTime, job.total) : 0;
-    frame(meta.keepView ? null : 'iso');
+    simT = meta.keepFrac != null ? meta.keepFrac * job.total : meta.keepTime != null ? Math.min(meta.keepTime, job.total) : 0;
+    if (!meta.keepView) frame('iso');
+    renderFlags();
     updateScene(true); updateHud();
     busy(null);
     return true;
@@ -2015,7 +2154,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   function describeTiming() {
     const b = $('timingBadge'); b.hidden = false;
     if (job.aligned) {
-      b.className = 'badge ok'; b.textContent = 'Synced to slicer · ' + fmtLong(job.total);
+      const adjusted = Math.abs(job.total - job.estimate) > 1;
+      b.className = 'badge ok'; b.textContent = (adjusted ? 'Synced to slicer, adjusted for print options · ' : 'Synced to slicer · ') + fmtLong(job.total);
       b.title = 'Total time matches the slicer estimate (' + fmtLong(job.estimate) + '); the motion planner fills in the timing between its progress markers. Planner alone: ' + fmtLong(job.plannerTotal) + '.';
     } else {
       b.className = 'badge'; b.textContent = 'Planner estimate · ' + fmtLong(job.total);

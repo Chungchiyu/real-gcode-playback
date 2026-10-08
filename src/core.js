@@ -29,7 +29,23 @@
 (function (root) {
   'use strict';
 
-  const FL_EXTRUDE = 1, FL_TRAVEL = 2, FL_EONLY = 4, FL_DWELL = 8, FL_ARC = 16, FL_STOP = 32;
+  const FL_EXTRUDE = 1, FL_TRAVEL = 2, FL_EONLY = 4, FL_DWELL = 8, FL_ARC = 16, FL_STOP = 32, FL_SKIP = 64;
+
+  /* Bambu-style conditional blocks: `M1002 judge_flag NAME` + `M622 J1|J0` … `M623`. The printer decides
+     at print time from the options chosen when sending; the viewer lets the user choose instead.
+     Defaults follow the usual send-dialog choices; anything else uses the file's own M622.1 default. */
+  const FLAG_INFO = {
+    g29_before_print_flag: { label: 'Bed leveling', def: true },
+    extrude_cali_flag: { label: 'Flow dynamics calibration', def: true },
+    timelapse_record_flag: { label: 'Timelapse', def: false },
+    build_plate_detect_flag: { label: 'Build plate detection', def: true },
+    g39_3rd_layer_detect_flag: { label: 'Nozzle clumping detection (layer 3)' },
+    g39_detection_flag: { label: 'Nozzle clumping detection' },
+    g39_mass_exceed_flag: { label: 'Clumping check: mass exceeded' },
+    filament_need_cali_flag: { label: 'Calibrate after filament change' },
+    last_extrude_cali_success: { label: 'Last flow calibration succeeded', def: true },
+  };
+  function flagLabel(name) { return (FLAG_INFO[name] && FLAG_INFO[name].label) || name.replace(/_flag$/, '').replace(/_/g, ' '); }
 
   // Canonical features. Colours follow OrcaSlicer's preview defaults so the two views read alike.
   const FEATURES = [
@@ -134,6 +150,40 @@
     let lastExtrudeZ = -1e9, lastExtrudeMove = 0;
     if (haveLayerComments) layers.push({ z: 0, h: 0, first: 0, start: true });   // start G-code, before layer 1
     let pendingStop = false;                     // a blocking command happened since the last move
+    // conditional blocks
+    const flagChoices = opts.flags || {};
+    const flagsFound = {};                       // name -> { name, label, value, fileDefault, count }
+    const blockStack = [];                       // true = this block runs
+    let judged = true, nextDefault = null, skipping = false, saved = null, g29Window = false, skippedMoves = 0;
+    const isBambu = text.indexOf('M1002 ') >= 0 || text.indexOf('M622 ') >= 0;
+    function judge(name) {
+      let def = nextDefault != null ? nextDefault : (FLAG_INFO[name] && FLAG_INFO[name].def != null ? FLAG_INFO[name].def : true);
+      if (FLAG_INFO[name] && FLAG_INFO[name].def != null) def = FLAG_INFO[name].def;
+      const value = name in flagChoices ? !!flagChoices[name] : def;
+      const f = flagsFound[name] || (flagsFound[name] = { name, label: flagLabel(name), value, fileDefault: def, count: 0 });
+      f.count++;
+      nextDefault = null; judged = value;
+    }
+    function updateSkipping() {
+      const now = blockStack.some(b => !b);
+      if (now && !skipping) {
+        // entering a block the printer will not run: remember the real machine state
+        saved = { x, y, z, e, ox, oy, oz, absXYZ, absE, fmm, accPrint, accTravel, accRetract, curFeat, curTool,
+                  px: P.a[n * 3], py: P.a[n * 3 + 1], pz: P.a[n * 3 + 2] };
+        pendingStop = true;
+      } else if (!now && skipping && saved) {
+        // leaving it: put the head back where it really is (a zero-time, undrawn hop)
+        const hx = P.a[n * 3], hy = P.a[n * 3 + 1], hz = P.a[n * 3 + 2];
+        if (hx !== saved.px || hy !== saved.py || hz !== saved.pz) {
+          const L = Math.hypot(saved.px - hx, saved.py - hy, saved.pz - hz);
+          skipping = true; push(saved.px, saved.py, saved.pz, FL_TRAVEL, 0, fmm, L, 0, lineNo);
+        }
+        ({ x, y, z, e, ox, oy, oz, absXYZ, absE, fmm, accPrint, accTravel, accRetract, curFeat, curTool } = saved);
+        saved = null; pendingStop = true;
+      }
+      skipping = now;
+    }
+    function addEvent(ev) { if (!skipping) events.push(ev); }
     const machineCmd = {};                       // limits set by M201/M203/M205/SET_VELOCITY_LIMIT
 
     P.ensure(3); P.a[0] = 0; P.a[1] = 0; P.a[2] = 0;
@@ -144,6 +194,7 @@
       P.ensure((n + 2) * 3);
       const p = (n + 1) * 3; P.a[p] = nx; P.a[p + 1] = ny; P.a[p + 2] = nz;
       if (pendingStop) { flags |= FL_STOP; pendingStop = false; }
+      if (skipping) { flags |= FL_SKIP; skippedMoves++; }
       G.flags.a[n] = flags; G.feat.a[n] = curFeat; G.layer.a[n] = curLayer < 0 ? 0 : curLayer;
       G.tool.a[n] = curTool; G.fcmd.a[n] = fcmd; G.len.a[n] = length; G.de.a[n] = dE;
       G.acc.a[n] = (flags & FL_EXTRUDE) ? accPrint : (flags & FL_EONLY) ? (accRetract || accPrint) : (accTravel || accPrint);
@@ -168,8 +219,10 @@
       if (arcFlag) fl |= FL_ARC;
       if (fl & FL_EXTRUDE) {
         // a layer is wherever extrusion happens at a new height, when the slicer gave us no markers
-        if (!haveLayerComments && tz > lastExtrudeZ + 0.015) { startLayer(tz, layers.length ? tz - lastExtrudeZ : tz); }
-        lastExtrudeZ = Math.max(lastExtrudeZ, tz); lastExtrudeMove = n + 1;
+        if (!skipping) {
+          if (!haveLayerComments && tz > lastExtrudeZ + 0.015) { startLayer(tz, layers.length ? tz - lastExtrudeZ : tz); }
+          lastExtrudeZ = Math.max(lastExtrudeZ, tz); lastExtrudeMove = n + 1;
+        }
       }
       push(tx, ty, tz, fl, dE, fmm, L, 0, lineNo);
     }
@@ -234,7 +287,7 @@
           if ((m = /ACCEL=([\d.]+)/.exec(up))) { accPrint = accTravel = parseFloat(m[1]); }
           if ((m = /SQUARE_CORNER_VELOCITY=([\d.]+)/.exec(up))) machineCmd.scv = parseFloat(m[1]);
           if ((m = /\bVELOCITY=([\d.]+)/.exec(up))) machineCmd.vmax = parseFloat(m[1]);
-        } else if (up.startsWith('PAUSE')) { events.push({ move: n, kind: 'pause', label: 'Pause' }); pendingStop = true; }
+        } else if (up.startsWith('PAUSE')) { addEvent({ move: n, kind: 'pause', label: 'Pause' }); pendingStop = true; }
         continue;
       }
 
@@ -278,6 +331,10 @@
             linearMove(tx + ox, ty + oy, tz + oz, dE, lineNo, false);
           }
           x = tx; y = ty; z = tz; e = te;
+        } else if (g === 29 && isBambu && g29Window) {
+          // bed leveling: no moves in the G-code; OrcaSlicer budgets 260 s for it on Bambu printers
+          push(phys(0), phys(1), phys(2), FL_DWELL, 0, 0, 0, 260, lineNo);
+          pendingStop = true;
         } else if (g === 4) {
           let s = 0;
           if (!isNaN(word.P)) s = word.P / 1000; else if (!isNaN(word.S)) s = word.S;
@@ -300,6 +357,22 @@
         }
       } else if (cmdLetter === 'M') {
         const mm = cmdNum;
+        if (mm === 1002) {
+          const m = /judge_flag\s+([A-Za-z0-9_]+)/.exec(trimmed);
+          if (m) judge(m[1]);
+          else if (/judge_last_extrude_cali_success/.test(trimmed)) judge('last_extrude_cali_success');
+          continue;
+        }
+        if (mm === 622.1) { if (!isNaN(word.S)) nextDefault = word.S >= 0.5; continue; }
+        if (mm === 622) {
+          const want = !isNaN(word.J) ? word.J : !isNaN(word.S) ? word.S : 1;
+          const runs = judged === (want >= 0.5);
+          blockStack.push(runs && !skipping);
+          if (want >= 0.5) g29Window = true;       // OrcaSlicer times G29 only inside "M622 J1" blocks
+          updateSkipping();
+          continue;
+        }
+        if (mm === 623) { blockStack.pop(); g29Window = false; updateSkipping(); continue; }
         if (mm === 82) absE = true;
         else if (mm === 83) absE = false;
         else if (mm === 204) {
@@ -326,15 +399,15 @@
           if (s > 0) push(phys(0), phys(1), phys(2), FL_DWELL, 0, 0, 0, s, lineNo);
           pendingStop = true;
         } else if (mm === 109 || mm === 190 || mm === 191) {
-          events.push({ move: n, kind: 'heat', label: (mm === 190 ? 'Wait for bed ' : 'Wait for nozzle ') + (isNaN(word.S) ? '' : word.S + '°C') });
+          addEvent({ move: n, kind: 'heat', label: (mm === 190 ? 'Wait for bed ' : 'Wait for nozzle ') + (isNaN(word.S) ? '' : word.S + '°C') });
           pendingStop = true;
         } else if (mm === 600 || mm === 601 || mm === 0 || mm === 1 || mm === 25 || mm === 226) {
-          events.push({ move: n, kind: 'pause', label: mm === 600 ? 'Filament change (M600)' : 'Pause' });
+          addEvent({ move: n, kind: 'pause', label: mm === 600 ? 'Filament change (M600)' : 'Pause' });
           pendingStop = true;
         } else if (mm === 620 && !isNaN(word.S)) {
           // Bambu AMS: "M620 S1A" announces a filament change to slot 1
           const slot = word.S;
-          if (slot < 255) events.push({ move: n, kind: 'tool', label: 'Filament change → slot ' + (slot + 1), tool: slot });
+          if (slot < 255) addEvent({ move: n, kind: 'tool', label: 'Filament change → slot ' + (slot + 1), tool: slot });
           pendingStop = true;
         }
       } else if (cmdLetter === 'T') {
@@ -343,7 +416,7 @@
             const prev = curTool; curTool = cmdNum | 0;
             const last = events[events.length - 1];
             // Bambu announces the change with M620 first; don't list the same change twice
-            if (!(last && last.kind === 'tool' && last.move >= lastExtrudeMove)) events.push({ move: n, kind: 'tool', label: 'Tool ' + prev + ' → ' + curTool, tool: curTool });
+            if (!(last && last.kind === 'tool' && last.move >= lastExtrudeMove)) addEvent({ move: n, kind: 'tool', label: 'Tool ' + prev + ' → ' + curTool, tool: curTool });
             else last.tool = curTool;
           }
           pendingStop = true;
@@ -378,6 +451,8 @@
     if (progress) progress(1);
     if (!layers.length) layers.push({ z: 0, h: 0, first: 0 });
 
+    while (blockStack.length) blockStack.pop();
+    if (skipping) updateSkipping();
     const job = {
       moves: n, pts: P.out((n + 1) * 3),
       flags: G.flags.out(n), feat: G.feat.out(n), layer: G.layer.out(n), tool: G.tool.out(n),
@@ -394,6 +469,8 @@
         job.acc[k] = (f & FL_EXTRUDE) ? m.accDefault : (f & FL_EONLY) ? m.accRetract : m.accTravel;
       }
     }
+    job.flagsFound = Object.values(flagsFound);
+    job.skippedMoves = skippedMoves;
     job.bed = resolveBed(job);
     return job;
   }
@@ -440,7 +517,7 @@
     let minX = 1e9, minY = 1e9, minZ = 1e9, maxX = -1e9, maxY = -1e9, maxZ = -1e9;
     const P = job.pts, F = job.flags;
     for (let k = 0; k < job.moves; k++) {
-      if (!(F[k] & FL_EXTRUDE)) continue;
+      if (!(F[k] & FL_EXTRUDE) || (F[k] & FL_SKIP)) continue;
       for (const q of [k, k + 1]) {
         const xx = P[q * 3], yy = P[q * 3 + 1], zz = P[q * 3 + 2];
         if (xx < minX) minX = xx; if (xx > maxX) maxX = xx;
@@ -586,20 +663,28 @@
      The slicer simulates the firmware more faithfully than any viewer can, so when it left markers
      we trust its clock and only use our planner for what happens *between* the markers. */
   function applyTiming(job, align) {
-    const n = job.moves, t0p = job.plannerT0, dp = job.plannerDur;
+    const n = job.moves, t0p = job.plannerT0, dp = job.plannerDur, F = job.flags;
+    /* Only motion is stretched to fit the estimate. Fixed waits (G4, M400 S/P, the G29 budget) last
+       exactly what they say in both clocks, so they are taken out of both sides before mapping. */
+    const fixedBefore = new Float64Array(n + 1);          // fixed-wait time before move k (planner clock)
+    for (let k = 0; k < n; k++) fixedBefore[k + 1] = fixedBefore[k] + ((F[k] & FL_DWELL) ? dp[k] : 0);
+    const fixedTotal = fixedBefore[n];
+    const motionAt = (k) => (k < n ? t0p[k] : job.plannerTotal) - fixedBefore[Math.min(k, n)];
+    const motionTotal = job.plannerTotal - fixedTotal, targetMotion = job.estimate - fixedTotal;
     const knotsA = [0], knotsB = [0];
-    let usable = align && job.estimate > 0 && job.m73.length >= 3;
+    let usable = align && job.estimate > 0 && job.m73.length >= 3 && motionTotal > 0 && targetMotion > 0;
     if (usable) {
       let lastP = -1;
       for (const mk of job.m73) {
         if (mk.p <= lastP || mk.p <= 0 || mk.p >= 100) continue;
-        const ta = mk.move < n ? t0p[mk.move] : job.plannerTotal;
-        if (ta <= knotsA[knotsA.length - 1] + 1e-6) continue;
-        knotsA.push(ta); knotsB.push(job.estimate * mk.p / 100); lastP = mk.p;
+        const ta = motionAt(mk.move);
+        const tb = job.estimate * mk.p / 100 - fixedBefore[Math.min(mk.move, n)];
+        if (ta <= knotsA[knotsA.length - 1] + 1e-6 || tb <= knotsB[knotsB.length - 1] + 1e-6) continue;
+        knotsA.push(ta); knotsB.push(tb); lastP = mk.p;
       }
-      knotsA.push(job.plannerTotal); knotsB.push(job.estimate);
+      knotsA.push(motionTotal); knotsB.push(Math.max(targetMotion, knotsB[knotsB.length - 1] + 1e-3));
       // sanity: wildly different totals mean the markers belong to some other clock (e.g. silent mode)
-      const ratio = job.estimate / Math.max(1, job.plannerTotal);
+      const ratio = targetMotion / motionTotal;
       if (knotsA.length < 4 || ratio < 0.3 || ratio > 3) usable = false;
     }
     const t0 = new Float64Array(n), dur = new Float32Array(n);
@@ -613,13 +698,24 @@
         const a0 = knotsA[seg], a1 = knotsA[seg + 1], b0 = knotsB[seg], b1 = knotsB[seg + 1];
         return b0 + (b1 - b0) * (a1 > a0 ? (ta - a0) / (a1 - a0) : 0);
       };
+      let t = 0;
       for (let k = 0; k < n; k++) {
-        const s = map(t0p[k]);
-        t0[k] = s;
-        if (k > 0) dur[k - 1] = Math.max(0, s - t0[k - 1]);
+        t0[k] = t;
+        if (F[k] & FL_DWELL) { dur[k] = dp[k]; }
+        else { const a = motionAt(k); dur[k] = Math.max(0, map(a + dp[k]) - map(a)); }
+        t += dur[k];
       }
-      if (n) dur[n - 1] = Math.max(0, job.estimate - t0[n - 1]);
-      job.total = job.estimate; job.aligned = true;
+      job.total = t; job.aligned = true;
+    }
+    // blocks the printer won't run still count toward the slicer's estimate (it times every line),
+    // so they are aligned like everything else and only then taken out of the clock
+    if (job.skippedMoves) {
+      let t = 0;
+      for (let k = 0; k < n; k++) {
+        if (job.flags[k] & FL_SKIP) dur[k] = 0;
+        t0[k] = t; t += dur[k];
+      }
+      job.total = t;
     }
     job.t0 = t0; job.dur = dur;
     // layer timing
@@ -660,7 +756,7 @@
   }
 
   const api = { parseGcode, planJob, applyTiming, moveAt, stateIn, FEATURES, featureId, parseDuration,
-                FL_EXTRUDE, FL_TRAVEL, FL_EONLY, FL_DWELL, FL_ARC, FL_STOP };
+                FL_EXTRUDE, FL_TRAVEL, FL_EONLY, FL_DWELL, FL_ARC, FL_STOP, FL_SKIP, FLAG_INFO, flagLabel };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PlaybackCore = api;
 })(typeof self !== 'undefined' ? self : this);
