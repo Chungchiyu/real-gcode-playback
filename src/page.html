@@ -54,7 +54,37 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
 #hud td:first-child { color: var(--muted); padding-right: 14px; white-space: nowrap; }
 #hud td.v { font-family: var(--mono); font-size: 11.5px; }
 #hud .dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.25); }
-#hud .src { margin-top: 7px; font: 11px/1.35 var(--mono); color: var(--muted); max-width: 330px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hud .srcRow { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+#hud .src { flex: 1; font: 11px/1.35 var(--mono); color: var(--muted); max-width: 330px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#codeToggle { padding: 3px 5px; border-radius: 6px; }
+#codeToggle svg { transition: transform .22s ease; }
+#codeToggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+#codePanel { width: 0; min-width: 100%; max-width: calc(100vw - 60px); max-height: 0; opacity: 0; overflow: hidden;
+             transition: max-height .28s cubic-bezier(.2,.7,.3,1), opacity .2s ease, margin-top .28s ease, width .28s cubic-bezier(.2,.7,.3,1); margin-top: 0; }
+#codePanel.open { width: 440px; max-height: 330px; opacity: 1; margin-top: 8px; }
+#codePanel .codeHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; margin-bottom: 5px; }
+#codePanel .codeHead button { padding: 2px 9px; font-size: 11px; }
+#codeScroll { position: relative; height: 288px; overflow-y: auto; overflow-x: hidden; border-radius: 8px;
+              background: color-mix(in srgb, var(--bg) 70%, #000 30%); border: 1px solid var(--border);
+              font: 11px/18px var(--mono); overscroll-behavior: contain; }
+#codeScroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#codeRows { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+#codeRows .ln { height: 18px; display: flex; gap: 10px; padding: 0 8px 0 0; cursor: pointer; white-space: pre; position: relative;
+                transition: background-color .25s ease; }
+#codeRows .ln:hover { background: var(--surface-2); }
+#codeRows .ln .no { flex: none; width: 58px; text-align: right; color: var(--muted); opacity: .6; user-select: none; }
+#codeRows .ln .tx { overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+#codeRows .ln.past .tx { opacity: .55; }
+#codeRows .ln.cur { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+#codeRows .ln.cur::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
+#codeRows .ln.cur .no { opacity: 1; color: var(--fg); }
+#codeRows .ln.flash { animation: lnflash .6s ease; }
+@keyframes lnflash { 0% { background: color-mix(in srgb, var(--accent) 60%, transparent); } 100% { background: transparent; } }
+#codeRows .c { color: var(--muted); font-style: italic; }
+#codeRows .k { color: #5fb3ff; font-weight: 600; }
+#codeRows .km { color: #e0a85a; font-weight: 600; }
+#codeRows .a { color: #7fd0a8; }
+@media (prefers-reduced-motion: reduce) { #codePanel, #codeToggle svg { transition: none; } }
 #hud .bar { height: 4px; border-radius: 3px; background: var(--surface-2); margin-top: 3px; overflow: hidden; width: 120px; display: inline-block; vertical-align: middle; margin-left: 6px; }
 #hud .bar i { display: block; height: 100%; background: var(--accent); width: 0; }
 #legend { right: 10px; bottom: 10px; background: var(--glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
@@ -171,7 +201,21 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         <tr><td>Filament</td><td id="hTool">–</td></tr>
         <tr><td>Remaining</td><td class="v" id="hRemain">–</td></tr>
       </table>
-      <div class="src" id="hSrc"></div>
+      <div class="srcRow">
+        <div class="src" id="hSrc"></div>
+        <button class="icon" id="codeToggle" aria-expanded="false" aria-controls="codePanel" title="Show the G-code (G)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+      <div id="codePanel" aria-hidden="true">
+        <div class="codeHead">
+          <span id="codeInfo" class="muted"></span>
+          <button id="codeFollow" class="on" title="Keep the running line in view">Follow</button>
+        </div>
+        <div id="codeScroll" tabindex="0" aria-label="G-code; click a line to jump to it">
+          <div id="codeSpacer"></div>
+          <div id="codeRows"></div>
+        </div>
+      </div>
     </div>
     <div id="viewbtns" class="overlay" hidden>
       <button id="vIso" title="Isometric view">Iso</button>
@@ -259,7 +303,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       <button class="icon" id="bEnd" title="End (End)"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="17.4" y="5" width="2.6" height="14" rx="1"/><path d="M4 5.5v13a1 1 0 0 0 1.5.86l10-6.4a1.1 1.1 0 0 0 0-1.9l-10-6.4A1 1 0 0 0 4 5.5z"/></svg></button>
       </div>
       <div class="side right">
-        <span class="muted keys" title="Keyboard"><kbd>Space</kbd> play <kbd>←→</kbd> move <kbd>↑↓</kbd> layer <kbd>±</kbd> speed</span>
+        <span class="muted keys" title="Keyboard"><kbd>Space</kbd> play <kbd>←→</kbd> move <kbd>↑↓</kbd> layer <kbd>±</kbd> speed <kbd>G</kbd> G-code</span>
         <div class="time"><b id="cTime">0:00</b> / <span id="cTotal">0:00</span> · <span id="cPct">0%</span></div>
       </div>
     </div>

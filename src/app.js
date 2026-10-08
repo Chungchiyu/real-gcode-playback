@@ -455,6 +455,10 @@
     const fc = String(job.config.filament_colour || '').split(/[;,]/)[job.tool[k]];
     $('hTool').innerHTML = (fc ? '<span class="dot" style="background:' + fc.trim() + '"></span>' : '') + (job.tool[k] + 1);
     $('hSrc').textContent = sourceLine(job.line[k]);
+    if (codeOpen) {
+      const cur = job.line[k];
+      if (cur !== codeLastCur) { codeLastCur = cur; codeFollowTo(true); renderCode(); }
+    }
     // bottom bar
     $('cTime').textContent = fmtTime(simT); $('cTotal').textContent = fmtTime(job.total);
     $('cPct').textContent = Math.floor(simT / Math.max(1e-9, job.total) * 100) + '%';
@@ -462,17 +466,123 @@
     drawTimeline();
   }
 
-  function sourceLine(no) {
-    if (!gcodeText || !no) return '';
-    if (!lineStarts) {
+  function ensureLineStarts() {
+    if (!lineStarts && gcodeText) {
       // index line starts once, lazily
       const starts = [0]; let i = -1;
       while ((i = gcodeText.indexOf('\n', i + 1)) >= 0) starts.push(i + 1);
+      if (starts[starts.length - 1] >= gcodeText.length) starts.pop();     // no empty last line
       lineStarts = Uint32Array.from(starts);
     }
-    const a = lineStarts[no - 1], b = no < lineStarts.length ? lineStarts[no] - 1 : gcodeText.length;
-    return no + ':  ' + gcodeText.substring(a, Math.min(b, a + 160)).trim();
+    return lineStarts;
   }
+  function lineText(no, max) {
+    if (!gcodeText || !no || !ensureLineStarts() || no > lineStarts.length) return '';
+    const a = lineStarts[no - 1], b = no < lineStarts.length ? lineStarts[no] - 1 : gcodeText.length;
+    return gcodeText.substring(a, Math.min(b, a + (max || 200))).replace(/\r$/, '');
+  }
+  function sourceLine(no) { return no ? no + ':  ' + lineText(no, 160).trim() : ''; }
+
+  /* ------------------------------------------------------------------ G-code panel
+     A virtual list: only the rows in view exist, so a million-line file scrolls as easily as a
+     short one. While following, it glides to keep the running line centred; scrolling by hand
+     pauses following until "Follow" is pressed again. Clicking a line seeks to it. */
+  const ROW = 18, MAX_SCROLL_H = 1.2e7;
+  const codeScroll = $('codeScroll'), codeRows = $('codeRows'), codeSpacer = $('codeSpacer');
+  let codeOpen = false, codeFollow = true, codeTarget = null, codeLastCur = -1, flashLine = 0, flashUntil = 0;
+  function codeCount() { return ensureLineStarts() ? lineStarts.length : 0; }
+  function codeGeom() {
+    const n = codeCount(), view = codeScroll.clientHeight || 288;
+    const realH = n * ROW, H = Math.min(realH, MAX_SCROLL_H), vis = Math.ceil(view / ROW);
+    return { n, view, H, scaled: realH > MAX_SCROLL_H, vis };
+  }
+  function firstLineAt(top, g) {      // 0-based index of the first row shown for a scrollTop
+    if (!g.scaled) return Math.floor(top / ROW);
+    return Math.round(top / Math.max(1, g.H - g.view) * Math.max(0, g.n - g.vis));
+  }
+  function scrollTopFor(first, g) {
+    first = Math.max(0, Math.min(Math.max(0, g.n - g.vis), first));
+    if (!g.scaled) return first * ROW;
+    return first / Math.max(1, g.n - g.vis) * Math.max(1, g.H - g.view);
+  }
+  const escHtml = (t) => t.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  function highlight(t) {
+    let code = t, comment = '';
+    const c = t.indexOf(';'); if (c >= 0) { code = t.substring(0, c); comment = t.substring(c); }
+    let html = escHtml(code).replace(/^(\s*)([GMT]\d+(?:\.\d+)?)/i, (m, sp, cmd) =>
+      sp + '<span class="' + (/^[mt]/i.test(cmd) ? 'km' : 'k') + '">' + cmd + '</span>');
+    html = html.replace(/(\s)([XYZEFIJRSP])(?=[-\d.])/g, '$1<span class="a">$2</span>');
+    if (comment) html += '<span class="c">' + escHtml(comment) + '</span>';
+    return html;
+  }
+  function renderCode() {
+    if (!codeOpen || !job) return;
+    const g = codeGeom();
+    codeSpacer.style.height = g.H + 'px';
+    const top = codeScroll.scrollTop, first = firstLineAt(top, g);
+    const offset = g.scaled ? top : first * ROW;
+    const cur = job.line[curMove] || 0;
+    let html = '';
+    for (let i = first; i < Math.min(g.n, first + g.vis + 2); i++) {
+      const no = i + 1;
+      html += '<div class="ln' + (no === cur ? ' cur' : no < cur ? ' past' : '') + (no === flashLine && performance.now() < flashUntil ? ' flash' : '') + '" data-line="' + no + '"><span class="no">' + no +
+              '</span><span class="tx">' + highlight(lineText(no, 220)) + '</span></div>';
+    }
+    codeRows.style.transform = 'translateY(' + offset + 'px)';
+    codeRows.innerHTML = html;
+    $('codeInfo').textContent = 'Line ' + (cur || '–') + ' of ' + g.n.toLocaleString();
+  }
+  function codeFollowTo(animate) {
+    if (!codeOpen || !codeFollow || !job) return;
+    const g = codeGeom(), cur = (job.line[curMove] || 1) - 1;
+    const target = scrollTopFor(cur - Math.floor(g.vis / 2), g);
+    if (!animate || Math.abs(target - codeScroll.scrollTop) > g.view * 40) { setCodeScroll(target); codeTarget = null; }
+    else codeTarget = target;
+  }
+  function setCodeScroll(v) { codeScroll.scrollTop = v; renderCode(); }
+  function stepCodeScroll() {      // called every animation frame: ease towards the target
+    if (codeTarget == null || !codeOpen) return;
+    const cur = codeScroll.scrollTop, d = codeTarget - cur;
+    if (Math.abs(d) < 0.6) { setCodeScroll(codeTarget); codeTarget = null; return; }
+    setCodeScroll(cur + d * 0.22);
+  }
+  function setFollow(on) {
+    codeFollow = on; $('codeFollow').classList.toggle('on', on);
+    $('codeFollow').textContent = on ? 'Following' : 'Follow';
+    if (on) codeFollowTo(true);
+  }
+  function setCodeOpen(open) {
+    codeOpen = open && !!job;
+    $('codePanel').classList.toggle('open', codeOpen);
+    $('codePanel').setAttribute('aria-hidden', String(!codeOpen));
+    $('codeToggle').setAttribute('aria-expanded', String(codeOpen));
+    if (codeOpen) { renderCode(); setFollow(true); codeFollowTo(false); }
+  }
+  $('codeToggle').onclick = () => setCodeOpen(!codeOpen);
+  $('codeFollow').onclick = () => setFollow(true);
+  codeScroll.addEventListener('scroll', renderCode);
+  // only real user input stops following (programmatic scrolls must not)
+  const userScrolled = () => { if (codeFollow) setFollow(false); codeTarget = null; };
+  codeScroll.addEventListener('wheel', userScrolled, { passive: true });
+  codeScroll.addEventListener('touchstart', userScrolled, { passive: true });
+  codeScroll.addEventListener('pointerdown', (e) => { if (e.target === codeScroll) userScrolled(); });   // scrollbar drag
+  codeScroll.addEventListener('keydown', (e) => {
+    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) { e.stopPropagation(); userScrolled(); }
+  });
+  codeRows.addEventListener('click', (e) => {
+    const row = e.target.closest('.ln'); if (!row || !job) return;
+    const no = parseInt(row.dataset.line, 10);
+    // the first move at or after this line; comments and settings jump to the move that follows
+    const L = job.line; let lo = 0, hi = job.moves - 1;
+    if (!(hi >= 0)) return;
+    if (no > L[hi]) { seek(job.total); }
+    else {
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (L[mid] < no) lo = mid + 1; else hi = mid; }
+      seek(job.t0[lo] + (job.dur[lo] > 0 ? Math.min(1e-4, job.dur[lo] / 2) : 0));
+    }
+    flashLine = no; flashUntil = performance.now() + 600;
+    renderCode();
+  });
 
   /* ------------------------------------------------------------------ timeline */
   const tlc = $('tlc'), tg = tlc.getContext('2d');
@@ -611,6 +721,7 @@
       case 't': case 'T': toggle('travel', $('tTravel')); break;
       case 'l': case 'L': toggle('layerOnly', $('tLayer')); break;
       case 'f': case 'F': toggle('follow', $('tFollow')); break;
+      case 'g': case 'G': setCodeOpen(!codeOpen); break;
     }
   });
 
@@ -716,6 +827,7 @@
     requestAnimationFrame(loop);
     if (lastLoop && now - lastLoop > 1500) { onLeave(); onReturn(); }
     lastLoop = now;
+    stepCodeScroll();
     if (playing && job) {
       const dt = Math.min(0.25, (now - lastFrame) / 1000); lastFrame = now;
       simT += dt * prefs.speed;
@@ -742,7 +854,8 @@
       busy(null); toast('Could not read this G-code: ' + err.message, true); console.error(err); return false;
     }
     if (parsed.moves < 2) { busy(null); toast('No moves found in this file.', true); return false; }
-    job = parsed; gcodeText = text; lineStarts = null;
+    job = parsed; gcodeText = text; lineStarts = null; codeLastCur = -1;
+    if (codeOpen) { codeScroll.scrollTop = 0; }
     busy('Building paths…', 0.95); await nextFrame();
     for (const k in featVisible) delete featVisible[k];
     buildBed(job.bed);

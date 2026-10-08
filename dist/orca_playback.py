@@ -5,12 +5,14 @@
 # name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
-# version = "1.1.1"
+# version = "1.2.0"
 # ///
 """Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
+1.2.0 (2026-10-09)
+  - G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment
 1.1.1 (2026-10-09)
   - Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload
 1.1.0 (2026-10-08)
@@ -80,8 +82,15 @@ SETUP_HINT = {
 }
 
 CHANGELOG = {
- "version": "1.1.1",
+ "version": "1.2.0",
  "entries": [
+  {
+   "version": "1.2.0",
+   "date": "2026-10-09",
+   "changes": [
+    "G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"
+   ]
+  },
   {
    "version": "1.1.1",
    "date": "2026-10-09",
@@ -182,7 +191,37 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
 #hud td:first-child { color: var(--muted); padding-right: 14px; white-space: nowrap; }
 #hud td.v { font-family: var(--mono); font-size: 11.5px; }
 #hud .dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.25); }
-#hud .src { margin-top: 7px; font: 11px/1.35 var(--mono); color: var(--muted); max-width: 330px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hud .srcRow { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+#hud .src { flex: 1; font: 11px/1.35 var(--mono); color: var(--muted); max-width: 330px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#codeToggle { padding: 3px 5px; border-radius: 6px; }
+#codeToggle svg { transition: transform .22s ease; }
+#codeToggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+#codePanel { width: 0; min-width: 100%; max-width: calc(100vw - 60px); max-height: 0; opacity: 0; overflow: hidden;
+             transition: max-height .28s cubic-bezier(.2,.7,.3,1), opacity .2s ease, margin-top .28s ease, width .28s cubic-bezier(.2,.7,.3,1); margin-top: 0; }
+#codePanel.open { width: 440px; max-height: 330px; opacity: 1; margin-top: 8px; }
+#codePanel .codeHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; margin-bottom: 5px; }
+#codePanel .codeHead button { padding: 2px 9px; font-size: 11px; }
+#codeScroll { position: relative; height: 288px; overflow-y: auto; overflow-x: hidden; border-radius: 8px;
+              background: color-mix(in srgb, var(--bg) 70%, #000 30%); border: 1px solid var(--border);
+              font: 11px/18px var(--mono); overscroll-behavior: contain; }
+#codeScroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#codeRows { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+#codeRows .ln { height: 18px; display: flex; gap: 10px; padding: 0 8px 0 0; cursor: pointer; white-space: pre; position: relative;
+                transition: background-color .25s ease; }
+#codeRows .ln:hover { background: var(--surface-2); }
+#codeRows .ln .no { flex: none; width: 58px; text-align: right; color: var(--muted); opacity: .6; user-select: none; }
+#codeRows .ln .tx { overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+#codeRows .ln.past .tx { opacity: .55; }
+#codeRows .ln.cur { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+#codeRows .ln.cur::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
+#codeRows .ln.cur .no { opacity: 1; color: var(--fg); }
+#codeRows .ln.flash { animation: lnflash .6s ease; }
+@keyframes lnflash { 0% { background: color-mix(in srgb, var(--accent) 60%, transparent); } 100% { background: transparent; } }
+#codeRows .c { color: var(--muted); font-style: italic; }
+#codeRows .k { color: #5fb3ff; font-weight: 600; }
+#codeRows .km { color: #e0a85a; font-weight: 600; }
+#codeRows .a { color: #7fd0a8; }
+@media (prefers-reduced-motion: reduce) { #codePanel, #codeToggle svg { transition: none; } }
 #hud .bar { height: 4px; border-radius: 3px; background: var(--surface-2); margin-top: 3px; overflow: hidden; width: 120px; display: inline-block; vertical-align: middle; margin-left: 6px; }
 #hud .bar i { display: block; height: 100%; background: var(--accent); width: 0; }
 #legend { right: 10px; bottom: 10px; background: var(--glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
@@ -299,7 +338,21 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
         <tr><td>Filament</td><td id="hTool">–</td></tr>
         <tr><td>Remaining</td><td class="v" id="hRemain">–</td></tr>
       </table>
-      <div class="src" id="hSrc"></div>
+      <div class="srcRow">
+        <div class="src" id="hSrc"></div>
+        <button class="icon" id="codeToggle" aria-expanded="false" aria-controls="codePanel" title="Show the G-code (G)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+      <div id="codePanel" aria-hidden="true">
+        <div class="codeHead">
+          <span id="codeInfo" class="muted"></span>
+          <button id="codeFollow" class="on" title="Keep the running line in view">Follow</button>
+        </div>
+        <div id="codeScroll" tabindex="0" aria-label="G-code; click a line to jump to it">
+          <div id="codeSpacer"></div>
+          <div id="codeRows"></div>
+        </div>
+      </div>
     </div>
     <div id="viewbtns" class="overlay" hidden>
       <button id="vIso" title="Isometric view">Iso</button>
@@ -387,7 +440,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       <button class="icon" id="bEnd" title="End (End)"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="17.4" y="5" width="2.6" height="14" rx="1"/><path d="M4 5.5v13a1 1 0 0 0 1.5.86l10-6.4a1.1 1.1 0 0 0 0-1.9l-10-6.4A1 1 0 0 0 4 5.5z"/></svg></button>
       </div>
       <div class="side right">
-        <span class="muted keys" title="Keyboard"><kbd>Space</kbd> play <kbd>←→</kbd> move <kbd>↑↓</kbd> layer <kbd>±</kbd> speed</span>
+        <span class="muted keys" title="Keyboard"><kbd>Space</kbd> play <kbd>←→</kbd> move <kbd>↑↓</kbd> layer <kbd>±</kbd> speed <kbd>G</kbd> G-code</span>
         <div class="time"><b id="cTime">0:00</b> / <span id="cTotal">0:00</span> · <span id="cPct">0%</span></div>
       </div>
     </div>
@@ -395,7 +448,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>window.PLAYBACK_ABOUT = {"version": "1.1.1", "entries": [{"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+<script>window.PLAYBACK_ABOUT = {"version": "1.2.0", "entries": [{"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
 /* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
@@ -1520,6 +1573,10 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     const fc = String(job.config.filament_colour || '').split(/[;,]/)[job.tool[k]];
     $('hTool').innerHTML = (fc ? '<span class="dot" style="background:' + fc.trim() + '"></span>' : '') + (job.tool[k] + 1);
     $('hSrc').textContent = sourceLine(job.line[k]);
+    if (codeOpen) {
+      const cur = job.line[k];
+      if (cur !== codeLastCur) { codeLastCur = cur; codeFollowTo(true); renderCode(); }
+    }
     // bottom bar
     $('cTime').textContent = fmtTime(simT); $('cTotal').textContent = fmtTime(job.total);
     $('cPct').textContent = Math.floor(simT / Math.max(1e-9, job.total) * 100) + '%';
@@ -1527,17 +1584,123 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     drawTimeline();
   }
 
-  function sourceLine(no) {
-    if (!gcodeText || !no) return '';
-    if (!lineStarts) {
+  function ensureLineStarts() {
+    if (!lineStarts && gcodeText) {
       // index line starts once, lazily
       const starts = [0]; let i = -1;
       while ((i = gcodeText.indexOf('\n', i + 1)) >= 0) starts.push(i + 1);
+      if (starts[starts.length - 1] >= gcodeText.length) starts.pop();     // no empty last line
       lineStarts = Uint32Array.from(starts);
     }
-    const a = lineStarts[no - 1], b = no < lineStarts.length ? lineStarts[no] - 1 : gcodeText.length;
-    return no + ':  ' + gcodeText.substring(a, Math.min(b, a + 160)).trim();
+    return lineStarts;
   }
+  function lineText(no, max) {
+    if (!gcodeText || !no || !ensureLineStarts() || no > lineStarts.length) return '';
+    const a = lineStarts[no - 1], b = no < lineStarts.length ? lineStarts[no] - 1 : gcodeText.length;
+    return gcodeText.substring(a, Math.min(b, a + (max || 200))).replace(/\r$/, '');
+  }
+  function sourceLine(no) { return no ? no + ':  ' + lineText(no, 160).trim() : ''; }
+
+  /* ------------------------------------------------------------------ G-code panel
+     A virtual list: only the rows in view exist, so a million-line file scrolls as easily as a
+     short one. While following, it glides to keep the running line centred; scrolling by hand
+     pauses following until "Follow" is pressed again. Clicking a line seeks to it. */
+  const ROW = 18, MAX_SCROLL_H = 1.2e7;
+  const codeScroll = $('codeScroll'), codeRows = $('codeRows'), codeSpacer = $('codeSpacer');
+  let codeOpen = false, codeFollow = true, codeTarget = null, codeLastCur = -1, flashLine = 0, flashUntil = 0;
+  function codeCount() { return ensureLineStarts() ? lineStarts.length : 0; }
+  function codeGeom() {
+    const n = codeCount(), view = codeScroll.clientHeight || 288;
+    const realH = n * ROW, H = Math.min(realH, MAX_SCROLL_H), vis = Math.ceil(view / ROW);
+    return { n, view, H, scaled: realH > MAX_SCROLL_H, vis };
+  }
+  function firstLineAt(top, g) {      // 0-based index of the first row shown for a scrollTop
+    if (!g.scaled) return Math.floor(top / ROW);
+    return Math.round(top / Math.max(1, g.H - g.view) * Math.max(0, g.n - g.vis));
+  }
+  function scrollTopFor(first, g) {
+    first = Math.max(0, Math.min(Math.max(0, g.n - g.vis), first));
+    if (!g.scaled) return first * ROW;
+    return first / Math.max(1, g.n - g.vis) * Math.max(1, g.H - g.view);
+  }
+  const escHtml = (t) => t.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  function highlight(t) {
+    let code = t, comment = '';
+    const c = t.indexOf(';'); if (c >= 0) { code = t.substring(0, c); comment = t.substring(c); }
+    let html = escHtml(code).replace(/^(\s*)([GMT]\d+(?:\.\d+)?)/i, (m, sp, cmd) =>
+      sp + '<span class="' + (/^[mt]/i.test(cmd) ? 'km' : 'k') + '">' + cmd + '</span>');
+    html = html.replace(/(\s)([XYZEFIJRSP])(?=[-\d.])/g, '$1<span class="a">$2</span>');
+    if (comment) html += '<span class="c">' + escHtml(comment) + '</span>';
+    return html;
+  }
+  function renderCode() {
+    if (!codeOpen || !job) return;
+    const g = codeGeom();
+    codeSpacer.style.height = g.H + 'px';
+    const top = codeScroll.scrollTop, first = firstLineAt(top, g);
+    const offset = g.scaled ? top : first * ROW;
+    const cur = job.line[curMove] || 0;
+    let html = '';
+    for (let i = first; i < Math.min(g.n, first + g.vis + 2); i++) {
+      const no = i + 1;
+      html += '<div class="ln' + (no === cur ? ' cur' : no < cur ? ' past' : '') + (no === flashLine && performance.now() < flashUntil ? ' flash' : '') + '" data-line="' + no + '"><span class="no">' + no +
+              '</span><span class="tx">' + highlight(lineText(no, 220)) + '</span></div>';
+    }
+    codeRows.style.transform = 'translateY(' + offset + 'px)';
+    codeRows.innerHTML = html;
+    $('codeInfo').textContent = 'Line ' + (cur || '–') + ' of ' + g.n.toLocaleString();
+  }
+  function codeFollowTo(animate) {
+    if (!codeOpen || !codeFollow || !job) return;
+    const g = codeGeom(), cur = (job.line[curMove] || 1) - 1;
+    const target = scrollTopFor(cur - Math.floor(g.vis / 2), g);
+    if (!animate || Math.abs(target - codeScroll.scrollTop) > g.view * 40) { setCodeScroll(target); codeTarget = null; }
+    else codeTarget = target;
+  }
+  function setCodeScroll(v) { codeScroll.scrollTop = v; renderCode(); }
+  function stepCodeScroll() {      // called every animation frame: ease towards the target
+    if (codeTarget == null || !codeOpen) return;
+    const cur = codeScroll.scrollTop, d = codeTarget - cur;
+    if (Math.abs(d) < 0.6) { setCodeScroll(codeTarget); codeTarget = null; return; }
+    setCodeScroll(cur + d * 0.22);
+  }
+  function setFollow(on) {
+    codeFollow = on; $('codeFollow').classList.toggle('on', on);
+    $('codeFollow').textContent = on ? 'Following' : 'Follow';
+    if (on) codeFollowTo(true);
+  }
+  function setCodeOpen(open) {
+    codeOpen = open && !!job;
+    $('codePanel').classList.toggle('open', codeOpen);
+    $('codePanel').setAttribute('aria-hidden', String(!codeOpen));
+    $('codeToggle').setAttribute('aria-expanded', String(codeOpen));
+    if (codeOpen) { renderCode(); setFollow(true); codeFollowTo(false); }
+  }
+  $('codeToggle').onclick = () => setCodeOpen(!codeOpen);
+  $('codeFollow').onclick = () => setFollow(true);
+  codeScroll.addEventListener('scroll', renderCode);
+  // only real user input stops following (programmatic scrolls must not)
+  const userScrolled = () => { if (codeFollow) setFollow(false); codeTarget = null; };
+  codeScroll.addEventListener('wheel', userScrolled, { passive: true });
+  codeScroll.addEventListener('touchstart', userScrolled, { passive: true });
+  codeScroll.addEventListener('pointerdown', (e) => { if (e.target === codeScroll) userScrolled(); });   // scrollbar drag
+  codeScroll.addEventListener('keydown', (e) => {
+    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) { e.stopPropagation(); userScrolled(); }
+  });
+  codeRows.addEventListener('click', (e) => {
+    const row = e.target.closest('.ln'); if (!row || !job) return;
+    const no = parseInt(row.dataset.line, 10);
+    // the first move at or after this line; comments and settings jump to the move that follows
+    const L = job.line; let lo = 0, hi = job.moves - 1;
+    if (!(hi >= 0)) return;
+    if (no > L[hi]) { seek(job.total); }
+    else {
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (L[mid] < no) lo = mid + 1; else hi = mid; }
+      seek(job.t0[lo] + (job.dur[lo] > 0 ? Math.min(1e-4, job.dur[lo] / 2) : 0));
+    }
+    flashLine = no; flashUntil = performance.now() + 600;
+    renderCode();
+  });
 
   /* ------------------------------------------------------------------ timeline */
   const tlc = $('tlc'), tg = tlc.getContext('2d');
@@ -1676,6 +1839,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       case 't': case 'T': toggle('travel', $('tTravel')); break;
       case 'l': case 'L': toggle('layerOnly', $('tLayer')); break;
       case 'f': case 'F': toggle('follow', $('tFollow')); break;
+      case 'g': case 'G': setCodeOpen(!codeOpen); break;
     }
   });
 
@@ -1781,6 +1945,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     requestAnimationFrame(loop);
     if (lastLoop && now - lastLoop > 1500) { onLeave(); onReturn(); }
     lastLoop = now;
+    stepCodeScroll();
     if (playing && job) {
       const dt = Math.min(0.25, (now - lastFrame) / 1000); lastFrame = now;
       simT += dt * prefs.speed;
@@ -1807,7 +1972,8 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       busy(null); toast('Could not read this G-code: ' + err.message, true); console.error(err); return false;
     }
     if (parsed.moves < 2) { busy(null); toast('No moves found in this file.', true); return false; }
-    job = parsed; gcodeText = text; lineStarts = null;
+    job = parsed; gcodeText = text; lineStarts = null; codeLastCur = -1;
+    if (codeOpen) { codeScroll.scrollTop = 0; }
     busy('Building paths…', 0.95); await nextFrame();
     for (const k in featVisible) delete featVisible[k];
     buildBed(job.bed);
