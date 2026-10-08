@@ -1,0 +1,9 @@
+{
+  "name": "real-gcode-playback",
+  "private": true,
+  "description": "Build-time dependency for the Real G-code Playback OrcaSlicer plugin",
+  "license": "MIT",
+  "devDependencies": {
+    "three": "0.147.0"
+  }
+}

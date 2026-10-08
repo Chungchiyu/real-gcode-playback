@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "entries": [
+    {
+      "version": "1.0.0",
+      "date": "2026-10-08",
+      "changes": [
+        "Playback tab: real-time playback of the sliced G-code",
+        "Motion planner with acceleration and cornering, synced to the slicer's time estimate",
+        "Timeline with layer bands and filament change, pause and heating markers",
+        "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament",
+        "Moving-bed view for bed slingers such as the A1 mini",
+        "Loads the latest slice, or a .gcode / .gcode.3mf file",
+        "Playback capture step for loading slices without permission prompts"
+      ]
+    }
+  ]
+}

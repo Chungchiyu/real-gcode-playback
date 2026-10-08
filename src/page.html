@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Playback</title>
+<style>
+:root {
+  --bg: var(--orca-bg, #1e2023); --fg: var(--orca-fg, #e6e8ea); --muted: var(--orca-muted, #98a0a8);
+  --border: var(--orca-border, #3a3e43); --accent: var(--orca-accent, #009688); --accent-fg: var(--orca-accent-fg, #fff);
+  --ui: var(--orca-font, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --panel: color-mix(in srgb, var(--bg) 86%, #000 14%);
+  --glass: color-mix(in srgb, var(--bg) 78%, transparent);
+  --surface: rgba(127,137,142,.10); --surface-2: rgba(127,137,142,.18);
+  --warn: #e0913a; --bad: #d9534f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 12.5px/1.4 var(--ui); overflow: hidden; }
+button, select, input { font: inherit; color: var(--fg); }
+button { background: var(--surface); border: 1px solid transparent; border-radius: 7px; padding: 5px 10px; cursor: pointer;
+         display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-fg); }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+button.on { background: color-mix(in srgb, var(--accent) 24%, transparent); border-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+button.icon { padding: 5px 7px; }
+select, input[type=number] { background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 4px 7px; }
+select:focus, input:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+svg { display: block; }
+.sep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 4px; }
+.muted { color: var(--muted); }
+
+#app { position: absolute; inset: 0; display: flex; flex-direction: column; }
+#top { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--border);
+       background: var(--panel); flex-wrap: wrap; user-select: none; }
+#file { display: flex; flex-direction: column; min-width: 0; max-width: 34ch; margin: 0 4px; }
+#file b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#file span { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { font-size: 10.5px; padding: 1px 7px; border-radius: 99px; background: var(--surface-2); color: var(--muted); }
+.badge.ok { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--fg); }
+.grow { flex: 1; }
+.group { display: flex; gap: 4px; align-items: center; }
+label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11.5px; }
+
+#stage { position: relative; flex: 1; min-height: 0; }
+#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+.overlay { position: absolute; pointer-events: none; }
+#hud { left: 10px; top: 10px; background: var(--glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+       border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; min-width: 250px; pointer-events: auto; }
+#hud .t { font: 600 20px/1.1 var(--mono); letter-spacing: -.01em; }
+#hud .t small { font-size: 12px; color: var(--muted); font-weight: 400; }
+#hud table { border-collapse: collapse; margin-top: 7px; font-size: 12px; }
+#hud td { padding: 1.5px 0; vertical-align: baseline; }
+#hud td:first-child { color: var(--muted); padding-right: 14px; white-space: nowrap; }
+#hud td.v { font-family: var(--mono); font-size: 11.5px; }
+#hud .dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.25); }
+#hud .src { margin-top: 7px; font: 11px/1.35 var(--mono); color: var(--muted); max-width: 330px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hud .bar { height: 4px; border-radius: 3px; background: var(--surface-2); margin-top: 3px; overflow: hidden; width: 120px; display: inline-block; vertical-align: middle; margin-left: 6px; }
+#hud .bar i { display: block; height: 100%; background: var(--accent); width: 0; }
+#legend { right: 10px; bottom: 10px; background: var(--glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+          border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 11.5px; max-height: 60%; overflow: auto; pointer-events: auto; }
+#legend h4 { margin: 0 0 5px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+#legend .row { display: flex; align-items: center; gap: 7px; padding: 1px 0; }
+#legend .sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,.25); flex: none; }
+#legend .grad { width: 160px; height: 10px; border-radius: 5px; }
+#legend .ends { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+#legend .row.off { opacity: .35; }
+#legend .row.click { cursor: pointer; }
+#viewbtns { right: 10px; top: 10px; display: flex; flex-direction: column; gap: 4px; pointer-events: auto; }
+#viewbtns button { background: var(--glass); border: 1px solid var(--border); backdrop-filter: blur(8px); justify-content: center; min-width: 34px; font-size: 11px; }
+#viewbtns button.on { border-color: var(--accent); }
+
+#empty { inset: 0; display: grid; place-items: center; pointer-events: auto; background: var(--bg); }
+#empty .box { max-width: 520px; text-align: center; padding: 26px; }
+#empty h2 { margin: 12px 0 6px; font-size: 17px; }
+#empty p { color: var(--muted); margin: 0 0 14px; }
+#empty .steps { text-align: left; background: var(--surface); border-radius: 10px; padding: 11px 14px; margin: 14px 0; font-size: 12px; }
+#empty .steps li { margin: 3px 0; }
+#empty .actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+#drop { inset: 0; display: none; place-items: center; background: color-mix(in srgb, var(--accent) 16%, transparent);
+        border: 2px dashed var(--accent); font-size: 16px; font-weight: 600; pointer-events: none; }
+#busy { inset: 0; display: none; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); pointer-events: auto; }
+#busy .box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; min-width: 280px; }
+#busy .pb { height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+#busy .pb i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .1s; }
+#toast { left: 50%; bottom: 14px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--border);
+         border-radius: 9px; padding: 7px 13px; opacity: 0; transition: opacity .2s; max-width: 70%; }
+#toast.show { opacity: 1; }
+#toast.err { border-color: var(--bad); }
+#optPanel { right: 10px; top: 8px; z-index: 5; pointer-events: auto; background: var(--panel); border: 1px solid var(--border);
+            border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 9px; width: 290px;
+            box-shadow: 0 10px 28px rgba(0,0,0,.35); }
+#optPanel[hidden] { display: none; }
+#optPanel label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--muted); }
+#optPanel label.check { flex-direction: row; align-items: center; gap: 7px; color: var(--fg); font-size: 12px; }
+#optPanel select { width: 100%; }
+
+#bottom { flex: none; border-top: 1px solid var(--border); background: var(--panel); padding: 6px 10px 8px; user-select: none; }
+#tl { position: relative; height: 34px; cursor: pointer; margin-bottom: 6px; }
+#tl canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#tip { position: absolute; bottom: 38px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--border);
+       border-radius: 7px; padding: 3px 8px; font: 11px var(--mono); white-space: nowrap; display: none; pointer-events: none; z-index: 3; }
+#controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#controls .time { font: 12px var(--mono); color: var(--muted); min-width: 160px; }
+#controls .time b { color: var(--fg); font-weight: 600; }
+#play { width: 40px; justify-content: center; }
+#layerIn { width: 66px; }
+kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <button id="btnLatest" class="primary" title="Load the G-code OrcaSlicer produced for the last slice">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+      Latest slice</button>
+    <button id="btnOpen" title="Open a .gcode or .gcode.3mf file">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      Open…</button>
+    <input type="file" id="file-in" accept=".gcode,.gco,.g,.3mf,.txt" hidden>
+    <select id="plateSel" title="Plate" hidden></select>
+    <div id="file"><b id="fileName">No G-code loaded</b><span id="fileInfo">Slice a plate, then press Latest slice</span></div>
+    <span id="timingBadge" class="badge" hidden></span>
+    <div class="grow"></div>
+    <label class="inline">Color
+      <select id="colorSel">
+        <option value="feature">Line type</option>
+        <option value="speed">Actual speed</option>
+        <option value="fcmd">Set speed</option>
+        <option value="flow">Volumetric flow</option>
+        <option value="layertime">Layer time</option>
+        <option value="filament">Filament</option>
+      </select></label>
+    <div class="sep"></div>
+    <div class="group">
+      <button id="tTravel" title="Show travel moves of the current layer (T)">Travel</button>
+      <button id="tLayer" title="Show only the layer being printed (L)">Layer only</button>
+      <button id="tFollow" title="Keep the camera on the nozzle (F)">Follow</button>
+      <button id="optBtn" title="More options">Options
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+    </div>
+  </div>
+
+  <div id="stage">
+    <canvas id="gl" tabindex="0"></canvas>
+    <div id="hud" class="overlay" hidden>
+      <div class="t"><span id="hTime">0:00</span> <small>/ <span id="hTotal">0:00</span></small></div>
+      <table>
+        <tr><td>Layer</td><td class="v"><span id="hLayer">–</span><span class="bar"><i id="hLayerBar"></i></span></td></tr>
+        <tr><td>Z</td><td class="v" id="hZ">–</td></tr>
+        <tr><td>Line type</td><td id="hFeat">–</td></tr>
+        <tr><td>Speed</td><td class="v"><span id="hSpeed">–</span> <span class="muted" id="hSpeedSet"></span></td></tr>
+        <tr><td>Flow</td><td class="v" id="hFlow">–</td></tr>
+        <tr><td>Accel</td><td class="v" id="hAcc">–</td></tr>
+        <tr><td>Filament</td><td id="hTool">–</td></tr>
+        <tr><td>Remaining</td><td class="v" id="hRemain">–</td></tr>
+      </table>
+      <div class="src" id="hSrc"></div>
+    </div>
+    <div id="viewbtns" class="overlay" hidden>
+      <button id="vIso" title="Isometric view">Iso</button>
+      <button id="vTop" title="Top view">Top</button>
+      <button id="vFront" title="Front view">Front</button>
+      <button id="vFit" title="Frame the print">Fit</button>
+    </div>
+    <div id="legend" class="overlay" hidden></div>
+    <div id="empty" class="overlay">
+      <div class="box">
+        <svg width="64" height="64" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round" style="margin:0 auto;opacity:.55">
+          <path d="M10 44 L32 54 L54 44 L32 34 Z" fill="currentColor" fill-opacity=".15"/>
+          <path d="M10 37 L32 47 L54 37"/><path d="M10 30 L32 40 L54 30"/>
+          <path d="M27 9 L42 18 L27 27 Z" fill="currentColor" fill-opacity=".35"/>
+        </svg>
+        <h2>Watch your print in real time</h2>
+        <p>Plays the sliced G-code with the timing a printer would take — accelerations, corners and all.</p>
+        <div class="actions">
+          <button class="primary" id="eLatest">Load latest slice</button>
+          <button id="eOpen">Open a G-code file…</button>
+        </div>
+        <ol class="steps" id="setupSteps" hidden></ol>
+        <p style="margin-top:10px;font-size:11.5px">You can also drop a <b>.gcode</b> or <b>.gcode.3mf</b> file here.</p>
+      </div>
+    </div>
+    <div id="drop" class="overlay">Drop G-code to play it</div>
+    <div id="busy" class="overlay"><div class="box"><div id="busyText">Loading…</div><div class="pb"><i id="busyBar"></i></div></div></div>
+    <div id="toast" class="overlay"></div>
+    <div id="optPanel" class="overlay" hidden>
+      <label>Printer motion
+        <select id="motionSel">
+          <option value="auto">Auto (from printer profile)</option>
+          <option value="bed">Bed moves in Y (A1, A1 mini, i3)</option>
+          <option value="head">Head moves in XY (CoreXY)</option>
+        </select></label>
+      <label>Line style
+        <select id="lineSel">
+          <option value="fat">Real extrusion width</option>
+          <option value="thin">Thin lines (faster on huge prints)</option>
+        </select></label>
+      <label>Timing
+        <select id="timingSel">
+          <option value="aligned">Match the slicer's time estimate</option>
+          <option value="planner">Motion planner only</option>
+        </select></label>
+      <label class="check"><input type="checkbox" id="autoChk"> Load each new slice automatically</label>
+      <label class="check"><input type="checkbox" id="headChk"> Show the hot end and gantry</label>
+    </div>
+  </div>
+
+  <div id="bottom">
+    <div id="tl"><canvas id="tlc"></canvas><div id="tip"></div></div>
+    <div id="controls">
+      <button class="icon" id="bStart" title="Start (Home)"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="5" width="2.6" height="14" rx="1"/><path d="M20 5.5v13a1 1 0 0 1-1.5.86L8.5 13a1.1 1.1 0 0 1 0-1.9l10-6.4A1 1 0 0 1 20 5.5z"/></svg></button>
+      <button class="icon" id="bPrevL" title="Previous layer (↓)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 6l-6 6 6 6"/><path d="M19 6l-6 6 6 6"/></svg></button>
+      <button class="icon" id="bPrevM" title="Previous move (←)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <button class="primary" id="play" title="Play / pause (Space)"><svg id="playIco" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg></button>
+      <button class="icon" id="bNextM" title="Next move (→)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+      <button class="icon" id="bNextL" title="Next layer (↑)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6l6 6-6 6"/><path d="M13 6l6 6-6 6"/></svg></button>
+      <button class="icon" id="bEnd" title="End (End)"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="17.4" y="5" width="2.6" height="14" rx="1"/><path d="M4 5.5v13a1 1 0 0 0 1.5.86l10-6.4a1.1 1.1 0 0 0 0-1.9l-10-6.4A1 1 0 0 0 4 5.5z"/></svg></button>
+      <div class="sep"></div>
+      <label class="inline">Speed
+        <select id="speedSel" title="Playback speed (− / +)">
+          <option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option>
+          <option value="25">25×</option><option value="50">50×</option><option value="100">100×</option><option value="250">250×</option>
+          <option value="500">500×</option><option value="1000">1000×</option><option value="2500">2500×</option>
+        </select></label>
+      <label class="inline">Layer <input type="number" id="layerIn" min="1" step="1"></label>
+      <div class="grow"></div>
+      <div class="time"><b id="cTime">0:00</b> / <span id="cTotal">0:00</span> · <span id="cPct">0%</span></div>
+      <span class="muted" style="font-size:11px" title="Keyboard"><kbd>Space</kbd> play <kbd>←→</kbd> move <kbd>↑↓</kbd> layer <kbd>±</kbd> speed</span>
+    </div>
+  </div>
+</div>
+
+<script>/*@@VENDOR@@*/</script>
+<script>/*@@CORE@@*/</script>
+<script>/*@@APP@@*/</script>
+</body></html>
