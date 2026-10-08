@@ -1,6 +1,13 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "entries": [
+    {
+      "version": "1.4.1",
+      "date": "2026-10-09",
+      "changes": [
+        "Clearer setup instructions on the start screen"
+      ]
+    },
     {
       "version": "1.4.0",
       "date": "2026-10-09",

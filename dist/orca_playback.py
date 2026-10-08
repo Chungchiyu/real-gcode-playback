@@ -5,12 +5,14 @@
 # name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
-# version = "1.4.0"
+# version = "1.4.1"
 # ///
 """Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
+1.4.1 (2026-10-09)
+  - Clearer setup instructions on the start screen
 1.4.0 (2026-10-09)
   - Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)
   - Option to keep playing when you leave the Playback tab
@@ -91,8 +93,15 @@ SETUP_HINT = {
 }
 
 CHANGELOG = {
- "version": "1.4.0",
+ "version": "1.4.1",
  "entries": [
+  {
+   "version": "1.4.1",
+   "date": "2026-10-09",
+   "changes": [
+    "Clearer setup instructions on the start screen"
+   ]
+  },
   {
    "version": "1.4.0",
    "date": "2026-10-09",
@@ -270,12 +279,18 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
 #viewbtns button { background: var(--glass); border: 1px solid var(--border); backdrop-filter: blur(8px); justify-content: center; min-width: 34px; font-size: 11px; }
 #viewbtns button.on { border-color: var(--accent); }
 
-#empty { inset: 0; display: grid; place-items: center; pointer-events: auto; background: var(--bg); }
-#empty .box { max-width: 520px; text-align: center; padding: 26px; }
+#empty { inset: 0; display: grid; place-items: center; pointer-events: auto; background: var(--bg); overflow: auto; }
+#empty .box { width: 100%; max-width: 520px; box-sizing: border-box; text-align: center; padding: 26px; }
 #empty h2 { margin: 12px 0 6px; font-size: 17px; }
 #empty p { color: var(--muted); margin: 0 0 14px; }
-#empty .steps { text-align: left; background: var(--surface); border-radius: 10px; padding: 11px 14px; margin: 14px 0; font-size: 12px; }
-#empty .steps li { margin: 3px 0; }
+#empty .steps { text-align: left; background: var(--surface); border-radius: 10px; padding: 12px 14px; margin: 16px 0 6px;
+                font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+#empty .steps[hidden] { display: none; }
+#empty .steps .title { font-weight: 600; color: var(--fg); margin: 0 0 8px; }
+#empty .steps .step { display: flex; align-items: flex-start; gap: 9px; margin: 6px 0 0; color: var(--fg); }
+#empty .steps .num { flex: none; width: 19px; height: 19px; border-radius: 50%; display: grid; place-items: center;
+                     background: color-mix(in srgb, var(--accent) 28%, transparent); font-size: 11px; font-weight: 700; line-height: 1; }
+#empty .steps .txt { flex: 1; min-width: 0; padding-top: 1px; }
 #empty .actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 #drop { inset: 0; display: none; place-items: center; background: color-mix(in srgb, var(--accent) 16%, transparent);
         border: 2px dashed var(--accent); font-size: 16px; font-weight: 600; pointer-events: none; }
@@ -415,7 +430,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
           <button class="primary" id="eLatest">Load latest slice</button>
           <button id="eOpen">Open a G-code file…</button>
         </div>
-        <ol class="steps" id="setupSteps" hidden></ol>
+        <div class="steps" id="setupSteps" hidden></div>
         <p style="margin-top:10px;font-size:11.5px">You can also drop a <b>.gcode</b> or <b>.gcode.3mf</b> file here.</p>
       </div>
     </div>
@@ -496,7 +511,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>window.PLAYBACK_ABOUT = {"version": "1.4.0", "entries": [{"version": "1.4.0", "date": "2026-10-09", "changes": ["Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)", "Option to keep playing when you leave the Playback tab"]}, {"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+<script>window.PLAYBACK_ABOUT = {"version": "1.4.1", "entries": [{"version": "1.4.1", "date": "2026-10-09", "changes": ["Clearer setup instructions on the start screen"]}, {"version": "1.4.0", "date": "2026-10-09", "changes": ["Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)", "Option to keep playing when you leave the Playback tab"]}, {"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
 /* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
@@ -2349,8 +2364,9 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
     const steps = $('setupSteps');
     if (msg.capture_enabled === false && msg.hint) {
       steps.hidden = false;
-      steps.innerHTML = '<li style="list-style:none;margin-left:-16px;color:var(--fg);font-weight:600">' + msg.hint.title + '</li>' +
-        msg.hint.steps.map(s => '<li>' + s + '</li>').join('');
+      // numbered rows built by hand: a native <ol> picks up the host page's list styles in OrcaSlicer
+      steps.innerHTML = '<div class="title">' + msg.hint.title + '</div>' +
+        msg.hint.steps.map((t, i) => '<div class="step"><span class="num">' + (i + 1) + '</span><span class="txt">' + t + '</span></div>').join('');
     } else steps.hidden = true;
   }
   if (host) host.onMessage(onHostMessage);

@@ -1087,8 +1087,9 @@
     const steps = $('setupSteps');
     if (msg.capture_enabled === false && msg.hint) {
       steps.hidden = false;
-      steps.innerHTML = '<li style="list-style:none;margin-left:-16px;color:var(--fg);font-weight:600">' + msg.hint.title + '</li>' +
-        msg.hint.steps.map(s => '<li>' + s + '</li>').join('');
+      // numbered rows built by hand: a native <ol> picks up the host page's list styles in OrcaSlicer
+      steps.innerHTML = '<div class="title">' + msg.hint.title + '</div>' +
+        msg.hint.steps.map((t, i) => '<div class="step"><span class="num">' + (i + 1) + '</span><span class="txt">' + t + '</span></div>').join('');
     } else steps.hidden = true;
   }
   if (host) host.onMessage(onHostMessage);
