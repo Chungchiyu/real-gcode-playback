@@ -68,7 +68,16 @@ Test (needs node, Python 3 and `pip install playwright && playwright install chr
 test/run_all.sh
 ```
 
-To release: add an entry at the top of `src/changelog.json`, run `python3 build.py`, and commit. The version in the plugin header, the in-app changelog and the plugin's docstring all come from that file.
+## Releasing
+
+The version in the plugin header, the in-app changelog and the plugin's docstring all come from `src/changelog.json`.
+
+1. Add the new version at the top of `src/changelog.json`, run `python3 build.py`, and commit (including `dist/orca_playback.py`).
+2. Create a GitHub release with the tag `v<version>` (for example `v1.4.2`) and publish it.
+
+Publishing the release runs [`.github/workflows/publish-orcacloud.yml`](.github/workflows/publish-orcacloud.yml), which builds the plugin and uploads it to Orca Cloud as `real_gcode_playback_any.py`. Orca Cloud uses the tag as the version (it must be higher than the published one) and the release notes as that version's changelog; leave the notes empty to use the entry from `src/changelog.json`. The workflow stops if the tag and `src/changelog.json` disagree.
+
+One-time setup: in Orca Cloud open **Edit plugin → GitHub publishing**, enter `Chungchiyu/real-gcode-playback` and click **Connect**. No secrets are needed; the workflow signs in with a GitHub OIDC token.
 
 ## License
 

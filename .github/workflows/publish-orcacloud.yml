@@ -1,0 +1,99 @@
+# Publishes the plugin to Orca Cloud whenever a GitHub release is published.
+# Based on the "Publish from GitHub" section of the Orca Cloud help guide:
+#   https://cloud.orcaslicer.com/wiki/#publish-from-github
+# No secrets are needed: Orca Cloud trusts a short-lived GitHub OIDC token (audience "orcacloud")
+# from the repository connected under Edit plugin > GitHub publishing.
+#
+# To release:
+#   1. add the new version at the top of src/changelog.json and push
+#   2. create a GitHub release with the tag v<that version> and publish it
+#      (leave the notes empty to use that version's entry from src/changelog.json)
+name: Publish to Orca Cloud
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  # Orca Cloud needs a target-OS suffix on every file name; a single .py plugin runs anywhere.
+  PLUGIN_FILES: "release/real_gcode_playback_any.py"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build the plugin
+        run: |
+          npm ci
+          python3 build.py
+          mkdir -p release
+          cp dist/orca_playback.py release/real_gcode_playback_any.py
+
+      - name: Check the tag matches the plugin version
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          plugin_version="$(jq -r .version src/changelog.json)"
+          if [ "$tag_version" != "$plugin_version" ]; then
+            echo "::error::Release tag $GITHUB_REF_NAME does not match the version in src/changelog.json ($plugin_version)."
+            exit 1
+          fi
+          grep -q "^# version = \"$plugin_version\"$" release/real_gcode_playback_any.py
+
+      - name: Publish to Orca Cloud
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          files=()
+          for pattern in $PLUGIN_FILES; do
+            for f in $pattern; do files+=("$f"); done
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No plugin files matched PLUGIN_FILES ($PLUGIN_FILES)."
+            exit 1
+          fi
+
+          oidc_token="$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=orcacloud" | jq -r .value)"
+
+          version="${GITHUB_REF_NAME#v}"
+
+          # Release notes become the Orca Cloud changelog (max 4000 bytes). Empty notes fall back
+          # to this version's entry in src/changelog.json.
+          notes="$(jq -r '.release.body // ""' "$GITHUB_EVENT_PATH")"
+          if [ -z "${notes//[[:space:]]/}" ]; then
+            notes="$(jq -r --arg v "$version" \
+              '.entries[] | select(.version == $v) | .changes | map("- " + .) | join("\n")' src/changelog.json)"
+          fi
+          notes="$(printf '%s' "$notes" | head -c 4000)"
+
+          if [ -n "$notes" ]; then
+            metadata="$(jq -cn --arg version "$version" --arg changelog "$notes" '{version: $version, changelog: $changelog}')"
+          else
+            metadata="$(jq -cn --arg version "$version" '{version: $version}')"
+          fi
+
+          form=(-F "metadata=$metadata")
+          for f in "${files[@]}"; do form+=(-F "files=@$f"); done
+
+          status="$(curl -sS -o response.json -w '%{http_code}' \
+            -H "Authorization: Bearer $oidc_token" \
+            "${form[@]}" \
+            https://api.orcaslicer.com/api/v1/plugin-publish/releases)"
+          cat response.json; echo
+          if [ "$status" != "201" ]; then
+            echo "::error::Orca Cloud returned HTTP $status (401: repository not connected to exactly one plugin; version errors: the tag must be higher than the published version)."
+            exit 1
+          fi
+          echo "Published ${files[*]} as version $version"
