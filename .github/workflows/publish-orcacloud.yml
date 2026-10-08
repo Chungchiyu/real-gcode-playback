@@ -9,9 +9,10 @@
 #   2. create a GitHub release with the tag v<that version> and publish it
 #      (leave the notes empty to use that version's entry from src/changelog.json)
 #
-# To upload versions that are already tagged (for example the older ones), run this workflow by
-# hand from the Actions tab. It uploads each tag in turn, oldest first, using the plugin file and
-# changelog committed at that tag. Versions Orca Cloud already has are skipped.
+# To upload earlier versions too, run this workflow by hand from the Actions tab
+# (Publish to Orca Cloud > Run workflow). It finds every version committed to dist/orca_playback.py
+# and uploads them oldest first, each with its own changelog entry. Versions Orca Cloud already has
+# (or anything not higher than its current version) are skipped.
 name: Publish to Orca Cloud
 
 on:
@@ -19,8 +20,8 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-      tags:
-        description: "Tags to upload, oldest first (empty = every v* tag)"
+      versions:
+        description: "Versions to upload, e.g. 1.2.0 1.3.0 (empty = every version)"
         required: false
         default: ""
 
@@ -109,7 +110,7 @@ jobs:
           fi
           echo "Published ${files[*]} as version $version"
 
-  publish-tags:
+  publish-history:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -117,29 +118,41 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Publish each tag to Orca Cloud
+      - name: Publish each version to Orca Cloud
         env:
-          TAGS: ${{ inputs.tags }}
+          VERSIONS: ${{ inputs.versions }}
         run: |
           set -euo pipefail
-          tags="${TAGS:-$(git tag -l 'v*' --sort=version:refname | tr '\n' ' ')}"
-          echo "Tags: $tags"
+
+          # version -> the latest commit whose dist/orca_playback.py has that version
+          declare -A commit_of
+          order=()
+          for c in $(git log --reverse --format=%H -- dist/orca_playback.py); do
+            v="$(git show "$c:dist/orca_playback.py" | sed -n 's/^# version = "\(.*\)"$/\1/p' | head -n1)"
+            [ -n "$v" ] || continue
+            [ -n "${commit_of[$v]:-}" ] || order+=("$v")
+            commit_of[$v]="$c"
+          done
+          if [ -n "${VERSIONS// /}" ]; then
+            read -r -a order <<< "$VERSIONS"
+          fi
+          echo "Versions: ${order[*]}"
 
           oidc_token="$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=orcacloud" | jq -r .value)"
 
           mkdir -p release
+          file=release/real_gcode_playback_any.py
           published=0
-          for tag in $tags; do
-            version="${tag#v}"
-            file=release/real_gcode_playback_any.py
-            git show "$tag:dist/orca_playback.py" > "$file"
-            if ! grep -q "^# version = \"$version\"$" "$file"; then
-              echo "::error::$tag: dist/orca_playback.py is not version $version."
+          for version in "${order[@]}"; do
+            c="${commit_of[$version]:-}"
+            if [ -z "$c" ]; then
+              echo "::error::No commit has version $version in dist/orca_playback.py."
               exit 1
             fi
-            notes="$(git show "$tag:src/changelog.json" | jq -r --arg v "$version" \
-              '.entries[] | select(.version == $v) | .changes | map("- " + .) | join("\n")' | head -c 4000)"
+            git show "$c:dist/orca_playback.py" > "$file"
+            notes="$(git show "$c:src/changelog.json" 2>/dev/null | jq -r --arg v "$version" \
+              '.entries[] | select(.version == $v) | .changes | map("- " + .) | join("\n")' | head -c 4000 || true)"
             if [ -n "$notes" ]; then
               metadata="$(jq -cn --arg version "$version" --arg changelog "$notes" '{version: $version, changelog: $changelog}')"
             else
@@ -149,14 +162,14 @@ jobs:
               -H "Authorization: Bearer $oidc_token" \
               -F "metadata=$metadata" -F "files=@$file" \
               https://api.orcaslicer.com/api/v1/plugin-publish/releases)"
-            echo "$tag -> HTTP $status: $(cat response.json)"
+            echo "$version (${c:0:7}) -> HTTP $status: $(cat response.json)"
             if [ "$status" = "201" ]; then
               published=$((published + 1))
             elif [ "$status" = "401" ]; then
               echo "::error::Orca Cloud rejected the sign-in (is this repository connected to exactly one plugin?)."
               exit 1
             else
-              echo "::warning::$tag was not uploaded (HTTP $status); Orca Cloud may already have this version or a newer one."
+              echo "::warning::$version was not uploaded (HTTP $status); Orca Cloud may already have this version or a newer one."
             fi
           done
           echo "Uploaded $published version(s)."
