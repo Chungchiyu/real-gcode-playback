@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Runs every test. Needs: node, python3, playwright (pip install playwright && playwright install chromium),
+# and a built dist/ (python build.py from the repo root).
+set -euo pipefail
+cd "$(dirname "$0")"
+mkdir -p shots
+python3 gen_gcode.py bambu bambu.gcode
+python3 gen_gcode.py marlin marlin.gcode
+python3 gen_flags.py
+node gen_big.js
+echo "== core";        node unit.js; node core_test.js; node flags_test.js
+echo "== page";        python3 ui_test.py; python3 code_test.py; python3 center_test.py; python3 flags_ui.py; python3 speed_test.py; python3 blur_test.py
+echo "== plugin";      python3 plugin_harness.py; python3 harness2.py

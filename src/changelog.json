@@ -1,6 +1,13 @@
 {
-  "version": "1.4.1",
+  "version": "1.4.2",
   "entries": [
+    {
+      "version": "1.4.2",
+      "date": "2026-10-09",
+      "changes": [
+        "Pausing when you click another tab now works in OrcaSlicer"
+      ]
+    },
     {
       "version": "1.4.1",
       "date": "2026-10-09",

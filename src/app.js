@@ -867,10 +867,22 @@
      visibilitychange; as a second signal, a long gap between animation frames means the view was
      not being drawn (hidden), which is treated the same way. */
   let lastLoop = 0;
-  function onLeave() { if (playing && prefs.pauseOnLeave !== false) setPlaying(false); }
-  function onReturn() { send({ cmd: 'check_latest' }); }
+  /* OrcaSlicer hides a tab's panel without telling the web view inside it (on Windows the page stays
+     "visible" and keeps animating), so visibilitychange alone never fires there. Clicking another tab
+     does take keyboard focus away from the page, though: a window blur is treated as leaving, and the
+     next focus or pointer movement inside the page as coming back. */
+  let away = false;
+  function onLeave() {
+    away = true;
+    if (playing && prefs.pauseOnLeave !== false) setPlaying(false);
+  }
+  function onReturn() { away = false; send({ cmd: 'check_latest' }); }
   document.addEventListener('visibilitychange', () => { if (document.hidden) onLeave(); else onReturn(); });
   window.addEventListener('pagehide', onLeave);
+  window.addEventListener('blur', () => { if (!document.hasFocus()) onLeave(); });
+  window.addEventListener('focus', () => { if (away) onReturn(); });
+  document.addEventListener('pointermove', () => { if (away && !document.hidden) onReturn(); }, { passive: true });
+  document.addEventListener('pointerdown', () => { if (away && !document.hidden) onReturn(); }, true);
 
   function loop(now) {
     requestAnimationFrame(loop);

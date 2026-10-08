@@ -5,12 +5,14 @@
 # name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
-# version = "1.4.1"
+# version = "1.4.2"
 # ///
 """Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
+1.4.2 (2026-10-09)
+  - Pausing when you click another tab now works in OrcaSlicer
 1.4.1 (2026-10-09)
   - Clearer setup instructions on the start screen
 1.4.0 (2026-10-09)
@@ -93,8 +95,15 @@ SETUP_HINT = {
 }
 
 CHANGELOG = {
- "version": "1.4.1",
+ "version": "1.4.2",
  "entries": [
+  {
+   "version": "1.4.2",
+   "date": "2026-10-09",
+   "changes": [
+    "Pausing when you click another tab now works in OrcaSlicer"
+   ]
+  },
   {
    "version": "1.4.1",
    "date": "2026-10-09",
@@ -470,7 +479,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       <div id="flagList" hidden></div>
       <label class="check"><input type="checkbox" id="headChk"> Show the hot end</label>
       <label class="check"><input type="checkbox" id="gantryChk"> Show the gantry</label>
-      <label class="check"><input type="checkbox" id="pauseLeaveChk"> Pause when leaving the Playback tab</label>
+      <label class="check" title="Pauses when you click another tab or another window takes the focus"><input type="checkbox" id="pauseLeaveChk"> Pause when leaving the Playback tab</label>
       <div class="about"><span id="verText">Playback</span> · <a href="#" id="logLink">What's new</a></div>
       <div id="changelog" hidden></div>
     </div>
@@ -511,7 +520,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>window.PLAYBACK_ABOUT = {"version": "1.4.1", "entries": [{"version": "1.4.1", "date": "2026-10-09", "changes": ["Clearer setup instructions on the start screen"]}, {"version": "1.4.0", "date": "2026-10-09", "changes": ["Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)", "Option to keep playing when you leave the Playback tab"]}, {"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+<script>window.PLAYBACK_ABOUT = {"version": "1.4.2", "entries": [{"version": "1.4.2", "date": "2026-10-09", "changes": ["Pausing when you click another tab now works in OrcaSlicer"]}, {"version": "1.4.1", "date": "2026-10-09", "changes": ["Clearer setup instructions on the start screen"]}, {"version": "1.4.0", "date": "2026-10-09", "changes": ["Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)", "Option to keep playing when you leave the Playback tab"]}, {"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
 /* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
@@ -2144,10 +2153,22 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
      visibilitychange; as a second signal, a long gap between animation frames means the view was
      not being drawn (hidden), which is treated the same way. */
   let lastLoop = 0;
-  function onLeave() { if (playing && prefs.pauseOnLeave !== false) setPlaying(false); }
-  function onReturn() { send({ cmd: 'check_latest' }); }
+  /* OrcaSlicer hides a tab's panel without telling the web view inside it (on Windows the page stays
+     "visible" and keeps animating), so visibilitychange alone never fires there. Clicking another tab
+     does take keyboard focus away from the page, though: a window blur is treated as leaving, and the
+     next focus or pointer movement inside the page as coming back. */
+  let away = false;
+  function onLeave() {
+    away = true;
+    if (playing && prefs.pauseOnLeave !== false) setPlaying(false);
+  }
+  function onReturn() { away = false; send({ cmd: 'check_latest' }); }
   document.addEventListener('visibilitychange', () => { if (document.hidden) onLeave(); else onReturn(); });
   window.addEventListener('pagehide', onLeave);
+  window.addEventListener('blur', () => { if (!document.hasFocus()) onLeave(); });
+  window.addEventListener('focus', () => { if (away) onReturn(); });
+  document.addEventListener('pointermove', () => { if (away && !document.hidden) onReturn(); }, { passive: true });
+  document.addEventListener('pointerdown', () => { if (away && !document.hidden) onReturn(); }, true);
 
   function loop(now) {
     requestAnimationFrame(loop);

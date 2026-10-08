@@ -1,0 +1,30 @@
+import sys, json, time
+from playwright.sync_api import sync_playwright
+html = open('../dist/playback.html').read()
+g = open(sys.argv[1] if len(sys.argv)>1 else 'bambu.gcode').read()
+errs=[]
+with sync_playwright() as p:
+    b = p.chromium.launch(args=["--use-gl=swiftshader","--enable-webgl","--ignore-gpu-blocklist"])
+    pg = b.new_page(viewport={'width':1400,'height':860})
+    pg.on('console', lambda m: errs.append(m.type+': '+m.text) if m.type in ('error','warning') else None)
+    pg.on('pageerror', lambda e: errs.append('pageerror: '+str(e)))
+    pg.set_content(html); pg.wait_for_timeout(500)
+    pg.screenshot(path='shots/0_empty.png')
+    pg.evaluate("t => PlaybackApp.loadText(t,{name:'bambu-test.gcode',when:'test'})", g)
+    pg.wait_for_timeout(1500)
+    info = pg.evaluate("()=>{const j=PlaybackApp.job;return {moves:j.moves,total:j.total,aligned:j.aligned,planner:j.plannerTotal}}")
+    print(info)
+    pg.evaluate("()=>PlaybackApp.seek(PlaybackApp.job.total*0.55)"); pg.wait_for_timeout(500)
+    pg.screenshot(path='shots/1_mid.png')
+    pg.evaluate("()=>{PlaybackApp.setPrefs({color:'speed'});}"); pg.select_option('#colorSel','speed'); pg.wait_for_timeout(400)
+    pg.screenshot(path='shots/2_speed.png')
+    pg.evaluate("()=>{PlaybackApp.setPrefs({layerOnly:true,travel:true,color:'feature'})}"); pg.select_option('#colorSel','feature'); pg.wait_for_timeout(400)
+    pg.screenshot(path='shots/3_layer.png')
+    # playback runs in real time
+    pg.evaluate("()=>{PlaybackApp.setPrefs({layerOnly:false,travel:false,speed:10}); PlaybackApp.seek(10); PlaybackApp.setPlaying(true)}")
+    pg.wait_for_timeout(2000)
+    t = pg.evaluate("()=>PlaybackApp.time"); print('after 2s at 10x, sim time', t)
+    pg.evaluate("()=>PlaybackApp.setPlaying(false)")
+    pg.click('#vTop'); pg.wait_for_timeout(300); pg.screenshot(path='shots/4_top.png')
+    b.close()
+print('\n'.join(errs) or 'no console errors')
