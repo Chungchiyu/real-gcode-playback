@@ -75,9 +75,9 @@ The version in the plugin header, the in-app changelog and the plugin's docstrin
 1. Add the new version at the top of `src/changelog.json`, run `python3 build.py`, and commit (including `dist/orca_playback.py`).
 2. Create a GitHub release with the tag `v<version>` (for example `v1.4.2`) and publish it.
 
-Publishing the release runs [`.github/workflows/publish-orcacloud.yml`](.github/workflows/publish-orcacloud.yml), which builds the plugin and uploads it to Orca Cloud as `real_gcode_playback_any.py`. Orca Cloud uses the tag as the version (it must be higher than the published one) and the release notes as that version's changelog; leave the notes empty to use the entry from `src/changelog.json`. The workflow stops if the tag and `src/changelog.json` disagree.
+Publishing the release runs [`.github/workflows/publish-orcacloud.yml`](.github/workflows/publish-orcacloud.yml), which finds the commit whose `dist/orca_playback.py` has that version and uploads that file to Orca Cloud as `real_gcode_playback_any.py`. Orca Cloud uses the tag as the version (it must be higher than the published one) and the release notes as that version's changelog; leave the notes empty to use the entry from `src/changelog.json`.
 
-To upload earlier versions too, open the **Actions** tab, pick **Publish to Orca Cloud** and click **Run workflow**. It uploads every version committed to `dist/orca_playback.py`, oldest first, each with its own changelog entry (or only the versions you list), and skips versions Orca Cloud already has.
+Earlier versions are uploaded the same way: create a release with the tag `v<old version>` on `main`, oldest first, and wait for each run to finish before the next. Orca Cloud only accepts uploads from release runs.
 
 One-time setup: in Orca Cloud open **Edit plugin → GitHub publishing**, enter `Chungchiyu/real-gcode-playback` and click **Connect**. No secrets are needed; the workflow signs in with a GitHub OIDC token.
 
