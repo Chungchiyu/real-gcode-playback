@@ -166,7 +166,9 @@ jobs:
             if [ "$status" = "201" ]; then
               published=$((published + 1))
             elif [ "$status" = "401" ]; then
-              echo "::error::Orca Cloud rejected the sign-in (is this repository connected to exactly one plugin?)."
+              claims="$(printf '%s' "$oidc_token" | cut -d. -f2 | tr '_-' '/+' | { base64 -d 2>/dev/null || true; } | jq -c '{event_name, workflow_ref, job_workflow_ref, ref}' 2>/dev/null || true)"
+              echo "OIDC claims sent: $claims"
+              echo "::error::Orca Cloud rejected the sign-in. The token must come from the release workflow connected under Edit plugin > GitHub publishing (exactly one plugin per repository); if Orca Cloud only trusts runs triggered by a published release, publish this version by creating a GitHub release instead of running by hand."
               exit 1
             else
               echo "::warning::$version was not uploaded (HTTP $status); Orca Cloud may already have this version or a newer one."
