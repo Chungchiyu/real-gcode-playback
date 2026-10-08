@@ -2,15 +2,17 @@
 # requires-python = ">=3.12"
 #
 # [tool.orcaslicer.plugin]
-# name = "Playback"
+# name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
-# version = "1.1.0"
+# version = "1.1.1"
 # ///
-"""Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
+"""Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
+1.1.1 (2026-10-09)
+  - Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload
 1.1.0 (2026-10-08)
   - Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is
   - Playback pauses when you leave the tab
@@ -42,7 +44,7 @@ Two capabilities:
 Without the capture capability the tab falls back to finding OrcaSlicer's temporary G-code for
 the last slice; OrcaSlicer asks once for read permission on those files.
 
-Files this plugin writes: only inside its own folder (captures/latest.gcode + latest.json).
+Files this plugin writes: only inside its own folder (.captures/latest.gcode + latest.json).
 No network access, no processes started.
 """
 
@@ -58,7 +60,8 @@ import zlib
 import orca
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-CAPTURE_DIR = os.path.join(PLUGIN_DIR, "captures")
+# dot-prefixed so OrcaSlicer's plugin scanner never treats it as a plugin folder
+CAPTURE_DIR = os.path.join(PLUGIN_DIR, ".captures")
 CAPTURE_FILE = os.path.join(CAPTURE_DIR, "latest.gcode")
 CAPTURE_META = os.path.join(CAPTURE_DIR, "latest.json")
 CHUNK_CHARS = 384 * 1024            # per message; each is one RunScript call into the page
@@ -77,8 +80,15 @@ SETUP_HINT = {
 }
 
 CHANGELOG = {
- "version": "1.1.0",
+ "version": "1.1.1",
  "entries": [
+  {
+   "version": "1.1.1",
+   "date": "2026-10-09",
+   "changes": [
+    "Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"
+   ]
+  },
   {
    "version": "1.1.0",
    "date": "2026-10-08",
@@ -119,7 +129,7 @@ SESSION_START = time.time()         # a capture older than this OrcaSlicer sessi
 PAGE_TEMPLATE = r'''<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Playback</title>
+<title>Real G-code Playback</title>
 <style>
 :root {
   --bg: var(--orca-bg, #1e2023); --fg: var(--orca-fg, #e6e8ea); --muted: var(--orca-muted, #98a0a8);
@@ -385,7 +395,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>window.PLAYBACK_ABOUT = {"version": "1.1.0", "entries": [{"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+<script>window.PLAYBACK_ABOUT = {"version": "1.1.1", "entries": [{"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
 /* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
@@ -1688,7 +1698,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   });
   (function about() {
     const info = window.PLAYBACK_ABOUT; if (!info) return;
-    $('verText').textContent = 'Playback v' + info.version;
+    $('verText').textContent = 'Real G-code Playback v' + info.version;
     const esc = (t) => String(t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
     $('changelog').innerHTML = info.entries.map(e => '<h5>v' + esc(e.version) + ' <span>' + esc(e.date || '') + '</span></h5><ul>' +
       e.changes.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>').join('');

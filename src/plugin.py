@@ -2,12 +2,12 @@
 # requires-python = ">=3.12"
 #
 # [tool.orcaslicer.plugin]
-# name = "Playback"
+# name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
 # version = "@@VERSION@@"
 # ///
-"""Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
+"""Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
@@ -29,7 +29,7 @@ Two capabilities:
 Without the capture capability the tab falls back to finding OrcaSlicer's temporary G-code for
 the last slice; OrcaSlicer asks once for read permission on those files.
 
-Files this plugin writes: only inside its own folder (captures/latest.gcode + latest.json).
+Files this plugin writes: only inside its own folder (.captures/latest.gcode + latest.json).
 No network access, no processes started.
 """
 
@@ -45,7 +45,8 @@ import zlib
 import orca
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-CAPTURE_DIR = os.path.join(PLUGIN_DIR, "captures")
+# dot-prefixed so OrcaSlicer's plugin scanner never treats it as a plugin folder
+CAPTURE_DIR = os.path.join(PLUGIN_DIR, ".captures")
 CAPTURE_FILE = os.path.join(CAPTURE_DIR, "latest.gcode")
 CAPTURE_META = os.path.join(CAPTURE_DIR, "latest.json")
 CHUNK_CHARS = 384 * 1024            # per message; each is one RunScript call into the page

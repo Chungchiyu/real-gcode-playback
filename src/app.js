@@ -633,7 +633,7 @@
   });
   (function about() {
     const info = window.PLAYBACK_ABOUT; if (!info) return;
-    $('verText').textContent = 'Playback v' + info.version;
+    $('verText').textContent = 'Real G-code Playback v' + info.version;
     const esc = (t) => String(t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
     $('changelog').innerHTML = info.entries.map(e => '<h5>v' + esc(e.version) + ' <span>' + esc(e.date || '') + '</span></h5><ul>' +
       e.changes.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>').join('');
