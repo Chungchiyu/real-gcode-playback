@@ -42,6 +42,8 @@ Without it, **Latest slice** reads OrcaSlicer's temporary G-code instead, and Or
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to make changes. Commit titles follow Conventional Commits (`feat: …`, `fix: …`). **Note:** a push to `main` that changes the version in `src/changelog.json` publishes that version to Orca Cloud (see [Releasing](#releasing)).
+
 ```
 src/
   core.js        G-code parser and motion planner (no DOM; runs in node)
@@ -72,14 +74,16 @@ test/run_all.sh
 
 The version in the plugin header, the in-app changelog and the plugin's docstring all come from `src/changelog.json`.
 
-1. Add the new version at the top of `src/changelog.json`, run `python3 build.py`, and commit (including `dist/orca_playback.py`).
-2. Create a GitHub release with the tag `v<version>` (for example `v1.4.2`) and publish it.
+1. Add the new version at the top of `src/changelog.json` (and set `"version"` to it), then run `python3 build.py`.
+2. Commit, including `dist/orca_playback.py`, and push to `main`.
+
+[`.github/workflows/release-on-push.yml`](.github/workflows/release-on-push.yml) sees that the push changed the version and creates the GitHub release `v<version>` with that version's changelog entry as its notes. Pushes that don't change the version release nothing; commit messages are not looked at. It stops if the version already has a release, is not higher than the latest one, or `dist/orca_playback.py` is not rebuilt. To release a version that was bumped earlier without being released, run **Release on push** by hand from the Actions tab. You can also create a release by hand on GitHub with the tag `v<version>`.
 
 Publishing the release runs [`.github/workflows/publish-orcacloud.yml`](.github/workflows/publish-orcacloud.yml), which finds the commit whose `dist/orca_playback.py` has that version and uploads that file to Orca Cloud as `real_gcode_playback_any.py`. Orca Cloud uses the tag as the version (it must be higher than the published one) and the release notes as that version's changelog; leave the notes empty to use the entry from `src/changelog.json`.
 
 Earlier versions are uploaded the same way: create a release with the tag `v<old version>` on `main`, oldest first, and wait for each run to finish before the next. Orca Cloud only accepts uploads from release runs.
 
-One-time setup: in Orca Cloud open **Edit plugin → GitHub publishing**, enter `Chungchiyu/real-gcode-playback` and click **Connect**. No secrets are needed; the workflow signs in with a GitHub OIDC token.
+One-time setup: create a fine-grained personal access token for this repository with **Contents: Read and write**, and save it as the Actions secret `RELEASE_TOKEN` (GitHub doesn't start the publish workflow for releases made with the built-in token). In Orca Cloud, open **Edit plugin → GitHub publishing**, enter `Chungchiyu/real-gcode-playback` and click **Connect**; the upload itself needs no secret, because it signs in with a GitHub OIDC token.
 
 ## License
 

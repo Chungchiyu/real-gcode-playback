@@ -1,0 +1,111 @@
+# Creates a GitHub release when a push to main changes the version in src/changelog.json.
+#
+# The rule looks at the files, not at commit messages: if the pushed code's src/changelog.json has
+# a "version" different from the one before the push, and that version is higher than every
+# existing v* tag, the release v<version> is created with that version's changelog entry as notes.
+# Publishing the release then runs publish-orcacloud.yml, which uploads it to Orca Cloud.
+# Pushes that leave the version alone never release anything.
+#
+# Run it by hand (Actions > Release on push > Run workflow) to release the current version when
+# it was bumped without being released, e.g. to test a build before publishing it.
+#
+# One-time setup: the release has to be created with a personal access token, because GitHub
+# does not start other workflows (publish-orcacloud.yml) for releases made with the built-in token.
+#   1. GitHub > Settings > Developer settings > Fine-grained tokens > Generate new token
+#      Repository access: only Chungchiyu/real-gcode-playback; Permissions: Contents = Read and write
+#   2. Repository > Settings > Secrets and variables > Actions > New repository secret
+#      Name: RELEASE_TOKEN, value: the token
+name: Release on push
+
+on:
+  push:
+    branches: [main]
+    paths: [src/changelog.json]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-on-push
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether this push releases
+        id: version
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version src/changelog.json)"
+          tag="v$version"
+          echo "Version in src/changelog.json: $version"
+
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            before_version=""
+            if [ -n "$BEFORE" ] && git cat-file -e "$BEFORE:src/changelog.json" 2>/dev/null; then
+              before_version="$(git show "$BEFORE:src/changelog.json" | jq -r .version)"
+            fi
+            if [ "$before_version" = "$version" ]; then
+              echo "The version did not change in this push ($version); nothing to release."
+              echo "release=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            echo "Version changed: ${before_version:-none} -> $version"
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+            echo "::error::$tag already exists. Bump the version in src/changelog.json to release again."
+            exit 1
+          fi
+          latest="$(git tag -l 'v*' --sort=-version:refname | head -n1)"
+          if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "${latest#v}" "$version" | sort -V | tail -n1)" != "$version" ]; then
+            echo "::error::$version is not higher than the latest release $latest."
+            exit 1
+          fi
+          if ! jq -e --arg v "$version" '.entries[] | select(.version == $v)' src/changelog.json > /dev/null; then
+            echo "::error::src/changelog.json has no entry for $version."
+            exit 1
+          fi
+
+          jq -r --arg v "$version" '.entries[] | select(.version == $v) | .changes | map("- " + .) | join("\n")' \
+            src/changelog.json > notes.md
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.version.outputs.release == 'true'
+        with:
+          node-version: 20
+
+      - name: Check the committed plugin is up to date
+        if: steps.version.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          cp dist/orca_playback.py /tmp/committed.py
+          npm ci
+          python3 build.py
+          if ! cmp -s dist/orca_playback.py /tmp/committed.py; then
+            echo "::error::dist/orca_playback.py is out of date. Run python3 build.py and commit it."
+            exit 1
+          fi
+
+      - name: Create the release
+        if: steps.version.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The RELEASE_TOKEN secret is missing. See the setup steps at the top of .github/workflows/release-on-push.yml."
+            exit 1
+          fi
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
+          echo "Released $TAG; publish-orcacloud.yml now uploads it to Orca Cloud."
