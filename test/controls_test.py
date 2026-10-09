@@ -37,6 +37,12 @@ with sync_playwright() as p:
     c2 = pg.evaluate(cam); nx, ny = pg.evaluate(proj, c2['pivot'])
     check('rotated', sum(abs(a - b) for a, b in zip(c2['dir'], c0['dir'])) > 0.2)
     check('the pivot stays in the middle while rotating', abs(nx - cx) < 1.5 and abs(ny - cy) < 1.5, (round(nx - cx, 2), round(ny - cy, 2)))
+    # direction, as in OrcaSlicer: dragging down raises the camera (it looks down more)
+    z0 = pg.evaluate(cam)['dir'][2]
+    pg.mouse.move(600, 400); pg.mouse.down()
+    for i in range(5): pg.mouse.move(600, 400 + 10 * (i + 1))
+    pg.mouse.up(); z1 = pg.evaluate(cam)['dir'][2]
+    check('dragging down looks down more', z1 < z0 - 0.05, (round(z0, 3), round(z1, 3)))
     # nothing straight ahead: turn about the current view centre (still the middle of the screen)
     pg.evaluate("()=>PlaybackApp.look(150,150,0, 150,40,90)")       # looking at an empty part of the bed
     empty = pg.evaluate("a=>PlaybackApp._pick(a[0],a[1])", [cx, cy])

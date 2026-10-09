@@ -104,7 +104,8 @@
     }
     function rotate(dx, dy) {
       const h = canvas.clientHeight || 1;
-      const yaw = -2 * Math.PI * dx / h, pitch = -2 * Math.PI * dy / h;
+      // like OrcaSlicer: drag right swings the camera left around the print, drag down raises it (looks down more)
+      const yaw = -2 * Math.PI * dx / h, pitch = 2 * Math.PI * dy / h;
       // yaw about world Z through the pivot
       q.setFromAxisAngle(Z, yaw);
       camera.position.sub(pivot).applyQuaternion(q).add(pivot);
