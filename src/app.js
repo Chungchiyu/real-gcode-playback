@@ -82,6 +82,7 @@
     let mode = null, pointerId = null, lastX = 0, lastY = 0, changed = true;
     const pivot = new THREE.Vector3(), panPerPx = { v: 0 };
     let zoomPick = null;                 // {x, y, p}: cached point under a resting cursor
+    let pivotShownAt = 0, pivotReleasedAt = 0;
     const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), q = new THREE.Quaternion();
     const api = { target, enabled: true, pick: null, fallbackPivot: null };
 
@@ -150,6 +151,7 @@
     }
     function end() {
       if (pointerId != null) { try { canvas.releasePointerCapture(pointerId); } catch (e) { /* already released */ } }
+      if (mode === 'rotate') { pivotReleasedAt = performance.now(); changed = true; }
       mode = null; pointerId = null; canvas.style.cursor = '';
     }
     // touch: one finger rotates, two fingers pinch-zoom and pan
@@ -176,7 +178,12 @@
       try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* not capturable */ }
       const { point, rr } = pickAt(e.clientX, e.clientY);
       if (mode === 'rotate') {
-        pivot.copy(point || (api.fallbackPivot && api.fallbackPivot()) || target);
+        // the point under the cursor, unless it is right in front of the lens: turning about that
+        // swings the print out of view, so the print's centre is the better pivot there
+        const centre = (api.fallbackPivot && api.fallbackPivot()) || target.clone();
+        const near = point && camera.position.distanceTo(point) < 0.3 * camera.position.distanceTo(centre);
+        pivot.copy(point && !near ? point : centre);
+        pivotShownAt = performance.now(); changed = true;
         canvas.style.cursor = 'grabbing';
       } else {
         const p = point || onTargetPlane(rr);
@@ -223,8 +230,29 @@
     }, { passive: false });
     canvas.addEventListener('pointerleave', () => { zoomPick = null; });
 
+    /* the centre of rotation, shown while turning: a dot in a ring, a constant 14 px on screen,
+       drawn over the print, fading out after the release */
+    const marker = (() => {
+      const c = document.createElement('canvas'); c.width = c.height = 64;
+      const g = c.getContext('2d');
+      g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 9; g.beginPath(); g.arc(32, 32, 24, 0, Math.PI * 2); g.stroke();
+      g.strokeStyle = '#ffffff'; g.lineWidth = 5; g.beginPath(); g.arc(32, 32, 24, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = 'rgba(0,0,0,.55)'; g.beginPath(); g.arc(32, 32, 9, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#2bd4a4'; g.beginPath(); g.arc(32, 32, 6, 0, Math.PI * 2); g.fill();
+      const tex = new THREE.CanvasTexture(c);
+      const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, depthWrite: false, transparent: true }));
+      m.renderOrder = 1000; m.visible = false; scene.add(m); return m;
+    })();
+    function updateMarker() {
+      const t = performance.now();
+      const fade = mode === 'rotate' ? 1 : Math.max(0, 1 - (t - pivotReleasedAt) / 450);
+      if (!(pivotShownAt > 0) || fade <= 0) { if (marker.visible) { marker.visible = false; return true; } return false; }
+      marker.visible = true; marker.position.copy(pivot);
+      marker.scale.setScalar(depthPerPx(pivot) * 14); marker.material.opacity = fade;
+      return true;                      // keep redrawing while it is shown or fading
+    }
     api.update = () => {
-      const c = changed; changed = false;
+      const c = changed | updateMarker(); changed = false;
       if (c) {
         // keep the near plane in step with how close we are, so zooming in doesn't clip the print
         const near = Math.min(5, Math.max(0.02, camera.position.distanceTo(target) / 400));
@@ -235,6 +263,7 @@
     api.sync = () => { camera.up.copy(Z); camera.lookAt(target); zoomPick = null; changed = true; };
     api.isDragging = () => mode != null;
     api._pivot = () => pivot.clone();
+    api._marker = () => ({ visible: marker.visible, opacity: marker.material.opacity });
     return api;
   })();
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 0.9));
@@ -508,10 +537,13 @@
       let t = (px - ox) * dx + (py - oy) * dy + (pz - oz) * dz;
       if (t <= 0 || t >= bestT) continue;
       const ex = ox + dx * t - px, ey = oy + dy * t - py, ez = oz + dz * t - pz;
-      const r = (thin ? 0 : (bead ? Math.max(bead[s * 2], bead[s * 2 + 1]) : lw) * 0.5) + t * pxAng * 4;
-      if (ex * ex + ey * ey + ez * ez > r * r) continue;
-      // the spot on the view ray closest to that line: exactly under the cursor, at the line's depth
-      bestT = t; bx = ox + dx * t; by = oy + dy * t; bz = oz + dz * t;
+      const rb = thin ? 0.05 : (bead ? Math.max(bead[s * 2], bead[s * 2 + 1]) : lw) * 0.5;
+      const r = rb + t * pxAng * 4, e2 = ex * ex + ey * ey + ez * ez;
+      if (e2 > r * r) continue;
+      // the spot on the view ray closest to that line (under the cursor, at the line's depth), pulled
+      // onto the line itself when the ray only passed near it, so zooming in ends on the plastic
+      const k = e2 > rb * rb ? rb / Math.sqrt(e2) : 1;
+      bestT = t; bx = px + ex * k; by = py + ey * k; bz = pz + ez * k;
     }
     return bestT < Infinity ? new THREE.Vector3(bx + off.x, by + off.y, bz + off.z) : null;
   };
@@ -1413,7 +1445,8 @@
                          _pick(x, y) { const r = canvas.getBoundingClientRect(); const rc = new THREE.Raycaster();
                                        rc.setFromCamera(new THREE.Vector2((x - r.left) / r.width * 2 - 1, -(y - r.top) / r.height * 2 + 1), camera);
                                        const h = controls.pick(rc.ray); return h ? h.sub(bedGroup.position).toArray() : null; },
-                         _cam() { const d = controls.target.clone().sub(camera.position); return { pos: camera.position.toArray(), dist: d.length(), dir: d.normalize().toArray(), pivot: controls._pivot().sub(bedGroup.position).toArray() }; },
+                         _marker() { return controls._marker(); },
+                         _cam() { const d = controls.target.clone().sub(camera.position); return { pos: camera.position.toArray(), posBed: camera.position.clone().sub(bedGroup.position).toArray(), dist: d.length(), dir: d.normalize().toArray(), pivot: controls._pivot().sub(bedGroup.position).toArray() }; },
                          _project(pt) { const v = new THREE.Vector3(pt[0], pt[1], pt[2]).add(bedGroup.position).project(camera); const r = canvas.getBoundingClientRect();
                                         return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; },
                          // tests: put the camera at (px,py,pz) looking at (tx,ty,tz), in bed millimetres
