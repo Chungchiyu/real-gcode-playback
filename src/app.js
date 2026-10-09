@@ -68,8 +68,175 @@
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(35, 1, 0.5, 5000);
   camera.up.set(0, 0, 1);
-  const controls = new THREE.OrbitControls(camera, canvas);
-  controls.enableDamping = true; controls.dampingFactor = 0.12; controls.screenSpacePanning = true;
+  /* CAD-style camera (SolidWorks logic for the centre of rotation). Same buttons as before: left drag
+     rotates, right drag (or Shift/Ctrl + left) pans, middle drag and the wheel zoom.
+     - Rotation pivots on the point of the print under the cursor when the drag starts, or on the
+       centre of the visible print when the cursor is over empty space. The view does not jump: the
+       camera keeps looking where it was looking and swings around the pivot (turntable, Z up).
+     - The wheel zooms toward the point under the cursor, so what you point at stays put.
+     - A drag ends on pointerup, pointercancel, lost capture or window blur, and the wheel never waits
+       for a drag to end, so zooming can't get stuck after a release the page didn't see. */
+  const controls = (() => {
+    const target = new THREE.Vector3();
+    const Z = new THREE.Vector3(0, 0, 1);
+    let mode = null, pointerId = null, lastX = 0, lastY = 0, changed = true;
+    const pivot = new THREE.Vector3(), panPerPx = { v: 0 };
+    let zoomPick = null;                 // {x, y, p}: cached point under a resting cursor
+    const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), q = new THREE.Quaternion();
+    const api = { target, enabled: true, pick: null, fallbackPivot: null };
+
+    function ray(clientX, clientY) {
+      const r = canvas.getBoundingClientRect();
+      const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+      const rc = new THREE.Raycaster(); rc.setFromCamera(ndc, camera); return rc.ray;
+    }
+    // point on the view ray at the depth of the current target (the plane through it facing the camera)
+    function onTargetPlane(rr) {
+      const n = camera.getWorldDirection(tmp2);
+      const denom = rr.direction.dot(n);
+      const d = Math.abs(denom) > 1e-6 ? target.clone().sub(rr.origin).dot(n) / denom : target.distanceTo(camera.position);
+      return rr.origin.clone().addScaledVector(rr.direction, Math.max(d, 1));
+    }
+    function pickAt(clientX, clientY) {
+      const rr = ray(clientX, clientY);
+      const hit = api.pick ? api.pick(rr) : null;
+      return { hit, point: hit || null, rr };
+    }
+    function rotate(dx, dy) {
+      const h = canvas.clientHeight || 1;
+      const yaw = -2 * Math.PI * dx / h, pitch = -2 * Math.PI * dy / h;
+      // yaw about world Z through the pivot
+      q.setFromAxisAngle(Z, yaw);
+      camera.position.sub(pivot).applyQuaternion(q).add(pivot);
+      target.sub(pivot).applyQuaternion(q).add(pivot);
+      // pitch about the camera's horizontal axis through the pivot, kept short of straight up/down
+      const view = tmp.copy(target).sub(camera.position).normalize();
+      const right = tmp2.copy(view).cross(Z);
+      if (right.lengthSq() > 1e-10) {
+        right.normalize();
+        const polar = Math.acos(Math.max(-1, Math.min(1, -view.z)));          // 0 = looking straight down
+        const np = Math.max(0.001, Math.min(Math.PI - 0.001, polar + pitch));
+        q.setFromAxisAngle(right, -(np - polar));
+        camera.position.sub(pivot).applyQuaternion(q).add(pivot);
+        target.sub(pivot).applyQuaternion(q).add(pivot);
+      }
+      camera.up.copy(Z); camera.lookAt(target); changed = true;
+    }
+    function pan(dx, dy) {
+      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
+      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+      const move = right.multiplyScalar(-dx * panPerPx.v).add(up.multiplyScalar(dy * panPerPx.v));
+      camera.position.add(move); target.add(move); changed = true;
+    }
+    function zoomAbout(p, f) {
+      const dist = camera.position.distanceTo(p);
+      if (f < 1 && dist * f < 0.6) f = 0.6 / Math.max(dist, 1e-6);          // don't go through what you point at
+      if (f > 1 && dist * f > 4000) f = 4000 / Math.max(dist, 1e-6);
+      if (Math.abs(f - 1) < 1e-6) return;
+      camera.position.sub(p).multiplyScalar(f).add(p);
+      target.sub(p).multiplyScalar(f).add(p);
+      changed = true;
+    }
+    function zoomPoint(clientX, clientY) {
+      if (zoomPick && Math.abs(zoomPick.x - clientX) < 3 && Math.abs(zoomPick.y - clientY) < 3) return zoomPick.p;
+      const { point, rr } = pickAt(clientX, clientY);
+      const p = point || onTargetPlane(rr);
+      zoomPick = { x: clientX, y: clientY, p: p.clone() };
+      return zoomPick.p;
+    }
+    function depthPerPx(p) {
+      const d = Math.max(0.5, camera.position.distanceTo(p));
+      return 2 * d * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / (canvas.clientHeight || 1);
+    }
+    function end() {
+      if (pointerId != null) { try { canvas.releasePointerCapture(pointerId); } catch (e) { /* already released */ } }
+      mode = null; pointerId = null; canvas.style.cursor = '';
+    }
+    // touch: one finger rotates, two fingers pinch-zoom and pan
+    const touches = new Map(); let pinch = null;
+
+    canvas.addEventListener('pointerdown', (e) => {
+      if (!api.enabled) return;
+      canvas.focus({ preventScroll: true });
+      if (e.pointerType === 'touch') {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) {
+          const [a, b] = [...touches.values()];
+          const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+          const p = zoomPoint(mx, my);
+          pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), mx, my, p }; panPerPx.v = depthPerPx(p); mode = null;
+          return;
+        }
+      }
+      end();
+      const panBtn = e.button === 2 || (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey));
+      mode = panBtn ? 'pan' : e.button === 1 ? 'dolly' : e.button === 0 ? 'rotate' : null;
+      if (!mode) return;
+      pointerId = e.pointerId; lastX = e.clientX; lastY = e.clientY;
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* not capturable */ }
+      const { point, rr } = pickAt(e.clientX, e.clientY);
+      if (mode === 'rotate') {
+        pivot.copy(point || (api.fallbackPivot && api.fallbackPivot()) || target);
+        canvas.style.cursor = 'grabbing';
+      } else {
+        const p = point || onTargetPlane(rr);
+        pivot.copy(p); panPerPx.v = depthPerPx(p);
+        canvas.style.cursor = mode === 'pan' ? 'move' : 'ns-resize';
+      }
+      e.preventDefault();
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && touches.size === 2) {
+          const [a, b] = [...touches.values()];
+          const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+          pan(mx - pinch.mx, my - pinch.my);
+          if (d > 1 && pinch.d > 1) zoomAbout(pinch.p, pinch.d / d);
+          pinch.d = d; pinch.mx = mx; pinch.my = my; panPerPx.v = depthPerPx(pinch.p);
+          return;
+        }
+      }
+      if (!mode || e.pointerId !== pointerId) return;
+      if (e.buttons === 0 && e.pointerType === 'mouse') { end(); return; }   // the button came up where we couldn't see it
+      const dx = e.clientX - lastX, dy = e.clientY - lastY; lastX = e.clientX; lastY = e.clientY;
+      if (mode === 'rotate') rotate(dx, dy);
+      else if (mode === 'pan') pan(dx, dy);
+      else if (mode === 'dolly') zoomAbout(pivot, Math.exp(dy * 0.006));
+      zoomPick = null;
+    });
+    const up = (e) => {
+      if (e.pointerType === 'touch') { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; }
+      if (e.pointerId === pointerId) end();
+    };
+    canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('pointercancel', up);
+    canvas.addEventListener('lostpointercapture', (e) => { if (e.pointerId === pointerId) end(); });
+    window.addEventListener('blur', () => { end(); touches.clear(); pinch = null; });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('wheel', (e) => {
+      if (!api.enabled) return;
+      e.preventDefault();
+      const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+      const dy = Math.max(-400, Math.min(400, e.deltaY * unit));
+      zoomAbout(zoomPoint(e.clientX, e.clientY), Math.exp(dy * 0.0012));
+    }, { passive: false });
+    canvas.addEventListener('pointerleave', () => { zoomPick = null; });
+
+    api.update = () => {
+      const c = changed; changed = false;
+      if (c) {
+        // keep the near plane in step with how close we are, so zooming in doesn't clip the print
+        const near = Math.min(5, Math.max(0.02, camera.position.distanceTo(target) / 400));
+        if (Math.abs(near - camera.near) / camera.near > 0.2) { camera.near = near; camera.updateProjectionMatrix(); }
+      }
+      return c;
+    };
+    api.sync = () => { camera.up.copy(Z); camera.lookAt(target); zoomPick = null; changed = true; };
+    api.isDragging = () => mode != null;
+    api._pivot = () => pivot.clone();
+    return api;
+  })();
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 0.9));
   const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(-1, -2, 3); scene.add(sun);
 
@@ -311,6 +478,50 @@
     bedGroup.add(R.partial);
     lastShown = -1;
   }
+
+  /* What's under the cursor, for the camera: the nearest visible line the view ray passes through
+     (within its own width, plus a few pixels so thin lines are easy to hit). Returns the world point
+     under the cursor at that line's depth, or null. A plain loop over the drawn segments: ~10 ms per million. */
+  controls.pick = (rr) => {
+    if (!job || !R.pos || !R.segMove.length) return null;
+    const off = bedGroup.position;
+    const ox = rr.origin.x - off.x, oy = rr.origin.y - off.y, oz = rr.origin.z - off.z;
+    const dx = rr.direction.x, dy = rr.direction.y, dz = rr.direction.z;
+    const pxAng = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / (canvas.clientHeight || 1);
+    const done = R.extPrefix[Math.min(curMove, job.moves)] || 0;
+    let a = 0, b = done;
+    if (prefs.layerOnly && R.layerObj) a = R.layerObj.userData.base;
+    const pos = R.pos, bead = R.bead, thin = prefs.lines === 'thin', lw = lineWidth();
+    let bestT = Infinity, bx = 0, by = 0, bz = 0;
+    for (let s = a; s < b; s++) {
+      const i = s * 6;
+      const ax = pos[i], ay = pos[i + 1], az = pos[i + 2];
+      const ux = pos[i + 3] - ax, uy = pos[i + 4] - ay, uz = pos[i + 5] - az;
+      // closest points between the ray o + t d and the segment a + u v, v in [0, 1]
+      const wx = ox - ax, wy = oy - ay, wz = oz - az;
+      const uu = ux * ux + uy * uy + uz * uz, ud = ux * dx + uy * dy + uz * dz;
+      const uw = ux * wx + uy * wy + uz * wz, dw = dx * wx + dy * wy + dz * wz;
+      const den = uu - ud * ud;
+      let v = den > 1e-12 ? (uw - ud * dw) / den : 0;
+      v = v < 0 ? 0 : v > 1 ? 1 : v;
+      const px = ax + ux * v, py = ay + uy * v, pz = az + uz * v;
+      let t = (px - ox) * dx + (py - oy) * dy + (pz - oz) * dz;
+      if (t <= 0 || t >= bestT) continue;
+      const ex = ox + dx * t - px, ey = oy + dy * t - py, ez = oz + dz * t - pz;
+      const r = (thin ? 0 : (bead ? Math.max(bead[s * 2], bead[s * 2 + 1]) : lw) * 0.5) + t * pxAng * 4;
+      if (ex * ex + ey * ey + ez * ez > r * r) continue;
+      // the spot on the view ray closest to that line: exactly under the cursor, at the line's depth
+      bestT = t; bx = ox + dx * t; by = oy + dy * t; bz = oz + dz * t;
+    }
+    return bestT < Infinity ? new THREE.Vector3(bx + off.x, by + off.y, bz + off.z) : null;
+  };
+  // over empty space the view turns about the centre of the print (what is drawn so far)
+  controls.fallbackPivot = () => {
+    if (!job) return null;
+    const m = job.bed.model, off = bedGroup.position;
+    const zTop = Math.min(m.maxZ, Math.max(m.minZ, headGroup.position.z));
+    return new THREE.Vector3((m.minX + m.maxX) / 2 + off.x, (m.minY + m.maxY) / 2 + off.y, (m.minZ + zTop) / 2);
+  };
 
   /* colour by the selected mode; also fills the legend */
   let colorRange = null;
@@ -912,7 +1123,7 @@
     place(target, dir.normalize().multiplyScalar(d));
   }
   function place(target, offset) {
-    controls.target.copy(target); camera.position.copy(target).add(offset); camera.updateProjectionMatrix(); controls.update(); dirty = true;
+    controls.target.copy(target); camera.position.copy(target).add(offset); camera.updateProjectionMatrix(); controls.sync(); controls.update(); dirty = true;
   }
   $('vIso').onclick = () => frame('iso'); $('vTop').onclick = () => frame('top');
   $('vFront').onclick = () => frame('front'); $('vFit').onclick = () => frame('iso');
@@ -998,6 +1209,9 @@
       busy(null); toast('Could not read this G-code: ' + err.message, true); console.error(err); return false;
     }
     if (parsed.moves < 2) { busy(null); toast('No moves found in this file.', true); return false; }
+    // a new G-code replacing one on screen (a re-slice) keeps the view and the time, unless the
+    // new print is somewhere else on the bed or shorter than the moment being shown
+    const prev = job ? { t: simT, model: job.bed.model } : null;
     job = parsed; gcodeText = text; lineStarts = null; codeLastCur = -1; currentMeta = meta;
     if (codeOpen) { codeScroll.scrollTop = 0; }
     busy('Building paths…', 0.95); await nextFrame();
@@ -1014,8 +1228,15 @@
     describeTiming();
     if (R.segMove.length > 1200000 && prefs.lines !== 'thin')
       setTimeout(() => toast('Large print (' + Math.round(R.segMove.length / 1e5) / 10 + 'M lines). If playback stutters, use Options → Line style → Thin lines.'), 400);
-    simT = meta.keepFrac != null ? meta.keepFrac * job.total : meta.keepTime != null ? Math.min(meta.keepTime, job.total) : 0;
-    if (!meta.keepView) frame('iso');
+    let keepView = !!meta.keepView;
+    if (meta.keepFrac != null) simT = meta.keepFrac * job.total;
+    else if (meta.keepTime != null) simT = Math.min(meta.keepTime, job.total);
+    else if (prev) {
+      simT = prev.t <= job.total ? prev.t : 0;
+      const a = prev.model, b = job.bed.model;
+      keepView = keepView || (a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY);
+    } else simT = 0;
+    if (!keepView) frame('iso');
     renderFlags();
     updateScene(true); updateHud();
     busy(null);
@@ -1188,6 +1409,13 @@
   window.PlaybackApp = { loadText, seek, setPlaying, get job() { return job; }, get time() { return simT; },
                          setPrefs(p) { Object.assign(prefs, p); syncOptionUI(); if (job) { if ("lines" in p) buildPaths(); else rebuildObjects(); computeColors(); if (R.main.userData.thin) R.main.geometry.attributes.color.needsUpdate = true; else R.main.geometry.setColors(R.col); updateScene(true); updateHud(); } },
                          frame, onHostMessage,
+                         // tests: camera state and the screen position of a bed point
+                         _pick(x, y) { const r = canvas.getBoundingClientRect(); const rc = new THREE.Raycaster();
+                                       rc.setFromCamera(new THREE.Vector2((x - r.left) / r.width * 2 - 1, -(y - r.top) / r.height * 2 + 1), camera);
+                                       const h = controls.pick(rc.ray); return h ? h.sub(bedGroup.position).toArray() : null; },
+                         _cam() { const d = controls.target.clone().sub(camera.position); return { pos: camera.position.toArray(), dist: d.length(), dir: d.normalize().toArray(), pivot: controls._pivot().sub(bedGroup.position).toArray() }; },
+                         _project(pt) { const v = new THREE.Vector3(pt[0], pt[1], pt[2]).add(bedGroup.position).project(camera); const r = canvas.getBoundingClientRect();
+                                        return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; },
                          // tests: put the camera at (px,py,pz) looking at (tx,ty,tz), in bed millimetres
-                         look(tx, ty, tz, px, py, pz) { controls.target.set(tx, ty, tz); camera.position.set(px, py, pz); camera.updateProjectionMatrix(); controls.update(); dirty = true; } };
+                         look(tx, ty, tz, px, py, pz) { controls.target.set(tx, ty, tz); camera.position.set(px, py, pz); camera.updateProjectionMatrix(); controls.sync(); controls.update(); dirty = true; } };
 })();

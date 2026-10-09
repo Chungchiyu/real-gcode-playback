@@ -15,7 +15,6 @@ DIST.mkdir(exist_ok=True)
 THREE = ROOT / "node_modules" / "three"   # npm install (three@0.147.0, pinned in package.json)
 VENDOR_FILES = [
     THREE / "build/three.min.js",
-    THREE / "examples/js/controls/OrbitControls.js",
     THREE / "examples/js/lines/LineSegmentsGeometry.js",
     THREE / "examples/js/lines/LineMaterial.js",
     THREE / "examples/js/lines/LineSegments2.js",
