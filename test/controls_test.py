@@ -43,6 +43,26 @@ with sync_playwright() as p:
     for i in range(5): pg.mouse.move(600, 400 + 10 * (i + 1))
     pg.mouse.up(); z1 = pg.evaluate(cam)['dir'][2]
     check('dragging down looks down more', z1 < z0 - 0.05, (round(z0, 3), round(z1, 3)))
+    # over the top: dragging down until the camera is straight above and on past it, in small steps.
+    # The picture must not flip or jump at the pole: screen-up turns smoothly, the view reaches straight down.
+    pg.mouse.move(600, 200); pg.mouse.down()
+    ups, zs, flips = [], [], 0
+    for i in range(60):
+        pg.mouse.move(600, 200 + 3 * (i + 1)); s_ = pg.evaluate(cam); ups.append(s_['up']); zs.append(s_['dir'][2])
+    pg.mouse.up()
+    for u0, u1 in zip(ups, ups[1:]):
+        if u0[0] * u1[0] + u0[1] * u1[1] + u0[2] * u1[2] < 0.9: flips += 1
+    check('reaches straight down at the top', min(zs) < -0.9999, round(min(zs), 6))
+    check('no flip or jump at the top', flips == 0, flips)
+    # spinning while straight overhead turns the picture smoothly too
+    pg.mouse.down(); ups = []
+    for i in range(20):
+        pg.mouse.move(600 + 6 * (i + 1), 380); ups.append(pg.evaluate(cam)['up'])
+    pg.mouse.up()
+    jumps = sum(1 for u0, u1 in zip(ups, ups[1:]) if u0[0] * u1[0] + u0[1] * u1[1] + u0[2] * u1[2] < 0.9)
+    check('spinning overhead is smooth', jumps == 0, jumps)
+    pg.click('#vTop'); pg.wait_for_timeout(100); tc = pg.evaluate(cam)
+    check('Top view looks straight down with the front of the bed at the bottom', tc['dir'][2] < -0.9999 and tc['up'][1] > 0.99, (tc['dir'], tc['up']))
     # nothing straight ahead: turn about the current view centre (still the middle of the screen)
     pg.evaluate("()=>PlaybackApp.look(150,150,0, 150,40,90)")       # looking at an empty part of the bed
     empty = pg.evaluate("a=>PlaybackApp._pick(a[0],a[1])", [cx, cy])

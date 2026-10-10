@@ -102,26 +102,36 @@
       const hit = api.pick ? api.pick(rr) : null;
       return { hit, point: hit || null, rr };
     }
+    /* The view direction is kept as two angles about the target: azimuth theta (around Z) and polar
+       angle phi (0 = straight down from above). The camera's axes are built from them directly,
+       never with lookAt, so straight overhead is an ordinary view: theta still says which way is up
+       on screen, and the picture can't flip or flicker at the pole. */
+    let theta = -2.1, phi = 0.9;
+    const basis = new THREE.Matrix4(), bx = new THREE.Vector3(), by = new THREE.Vector3(), bz = new THREE.Vector3();
+    function orient() {
+      const st = Math.sin(theta), ct = Math.cos(theta), sp = Math.sin(phi), cp = Math.cos(phi);
+      const d = Math.max(1e-6, camera.position.distanceTo(target));
+      bz.set(sp * ct, sp * st, cp);                       // from the target toward the camera
+      bx.set(-st, ct, 0);                                  // screen right
+      by.set(-cp * ct, -cp * st, sp);                      // screen up
+      camera.position.copy(target).addScaledVector(bz, d);
+      basis.makeBasis(bx, by, bz); camera.quaternion.setFromRotationMatrix(basis);
+      camera.updateMatrix(); changed = true;
+    }
+    // read the angles back after the camera was placed from outside (view buttons, tests)
+    function fromCamera() {
+      const v = tmp.copy(camera.position).sub(target), d = v.length();
+      if (d < 1e-9) return;
+      phi = Math.acos(Math.max(-1, Math.min(1, v.z / d)));
+      if (Math.sin(phi) > 1e-6) theta = Math.atan2(v.y, v.x);   // at the pole keep the last azimuth
+      orient();
+    }
     function rotate(dx, dy) {
       const h = canvas.clientHeight || 1;
       // like OrcaSlicer: drag right swings the camera left around the print, drag down raises it (looks down more)
-      const yaw = -2 * Math.PI * dx / h, pitch = 2 * Math.PI * dy / h;
-      // yaw about world Z through the pivot
-      q.setFromAxisAngle(Z, yaw);
-      camera.position.sub(pivot).applyQuaternion(q).add(pivot);
-      target.sub(pivot).applyQuaternion(q).add(pivot);
-      // pitch about the camera's horizontal axis through the pivot, kept short of straight up/down
-      const view = tmp.copy(target).sub(camera.position).normalize();
-      const right = tmp2.copy(view).cross(Z);
-      if (right.lengthSq() > 1e-10) {
-        right.normalize();
-        const polar = Math.acos(Math.max(-1, Math.min(1, -view.z)));          // 0 = looking straight down
-        const np = Math.max(0.001, Math.min(Math.PI - 0.001, polar + pitch));
-        q.setFromAxisAngle(right, -(np - polar));
-        camera.position.sub(pivot).applyQuaternion(q).add(pivot);
-        target.sub(pivot).applyQuaternion(q).add(pivot);
-      }
-      camera.up.copy(Z); camera.lookAt(target); changed = true;
+      theta -= 2 * Math.PI * dx / h;
+      phi = Math.max(0, Math.min(Math.PI, phi - 2 * Math.PI * dy / h));
+      orient();
     }
     function pan(dx, dy) {
       const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
@@ -239,7 +249,7 @@
       }
       return c;
     };
-    api.sync = () => { camera.up.copy(Z); camera.lookAt(target); zoomPick = null; changed = true; };
+    api.sync = () => { fromCamera(); zoomPick = null; changed = true; };
     api.isDragging = () => mode != null;
     api._pivot = () => pivot.clone();
     return api;
@@ -1119,7 +1129,7 @@
     const target = new THREE.Vector3(cx, cy + yOff, cz);
     const d = size * 1.7 + 18;
     let dir;
-    if (view === 'top') dir = new THREE.Vector3(0, -0.001, 1);
+    if (view === 'top') dir = new THREE.Vector3(0, -1e-5, 1);          // straight down, front of the bed at the bottom
     else if (view === 'front') dir = new THREE.Vector3(0, -1, 0.12);
     else if (view === 'bed') { const s = Math.max(bed.x1 - bed.x0, bed.y1 - bed.y0); target.set((bed.x0 + bed.x1) / 2, (bed.y0 + bed.y1) / 2 + yOff, 0); dir = new THREE.Vector3(-0.55, -1, 0.8); return place(target, dir.normalize().multiplyScalar(s * 1.6)); }
     else dir = new THREE.Vector3(-0.6, -1, 0.75);
@@ -1416,7 +1426,7 @@
                          _pick(x, y) { const r = canvas.getBoundingClientRect(); const rc = new THREE.Raycaster();
                                        camera.updateMatrixWorld(); rc.setFromCamera(new THREE.Vector2((x - r.left) / r.width * 2 - 1, -(y - r.top) / r.height * 2 + 1), camera);
                                        const h = controls.pick(rc.ray); return h ? h.sub(bedGroup.position).toArray() : null; },
-                         _cam() { const d = controls.target.clone().sub(camera.position); return { pos: camera.position.toArray(), posBed: camera.position.clone().sub(bedGroup.position).toArray(), dist: d.length(), dir: d.normalize().toArray(), pivot: controls._pivot().sub(bedGroup.position).toArray() }; },
+                         _cam() { const d = controls.target.clone().sub(camera.position); return { pos: camera.position.toArray(), posBed: camera.position.clone().sub(bedGroup.position).toArray(), dist: d.length(), dir: d.normalize().toArray(), up: new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1).toArray(), pivot: controls._pivot().sub(bedGroup.position).toArray() }; },
                          _project(pt) { camera.updateMatrixWorld(); const v = new THREE.Vector3(pt[0], pt[1], pt[2]).add(bedGroup.position).project(camera); const r = canvas.getBoundingClientRect();
                                         return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; },
                          // tests: put the camera at (px,py,pz) looking at (tx,ty,tz), in bed millimetres
