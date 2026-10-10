@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.5.0 (2026-10-10)
+- Lines are drawn with their actual width and height from the G-code, so scarf seams, Z contouring and variable-width walls look as they print
+- Colour by line height or line width; the readout shows the current line's width × height
+- Rotating turns about the middle of the screen, at the print straight ahead, and can go straight overhead without flickering; the wheel zooms toward the cursor
+- Fixed zooming sometimes getting stuck until you clicked
+- A new slice keeps the camera and the time
+
 ## v1.4.3 (2026-10-09)
 - Fixed playback running far too fast in the first part of Bambu Lab prints with bed leveling (since 1.3.0)
 
