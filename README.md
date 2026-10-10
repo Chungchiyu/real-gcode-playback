@@ -38,7 +38,7 @@ Without it, **Latest slice** reads OrcaSlicer's temporary G-code instead, and Or
 
 - Read-only: never changes your G-code or model.
 - No network access, and no files written outside the plugin's own folder.
-- Exports are saved with the system's Save dialog where OrcaSlicer's page has one (Windows). Elsewhere they go into the plugin's own `exports` folder, and the path is shown after saving. Videos are rendered frame by frame, so their timing is exact however fast the computer is; MP4 uses H.264 when the system has an encoder for it, otherwise VP9.
+- Exports: OrcaSlicer's page can't open a Save dialog, so videos and pictures are saved into the plugin's own `exports` folder, and the Export dialog shows the full path with a Copy button. Videos are rendered frame by frame, so their timing is exact however fast the computer is. Inside OrcaSlicer they are recorded in real time (a 30 s video takes at least 30 s); opened in a browser, they are encoded faster than real time. MP4 uses H.264 when the system has it.
 - No extra Python packages to install.
 - Heating time is not counted. Bed leveling counts as 260 s, as in OrcaSlicer's estimate.
 - On Linux, OrcaSlicer's plugin sandbox blocks paths containing `conf` (its data folder is `~/.config/OrcaSlicer`), so Playback capture cannot work there; use Latest slice or open a file.

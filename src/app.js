@@ -1503,9 +1503,10 @@
       const sc = xs('xImgSize').value, v = viewSize();
       const s = what === 'window' ? null : sc === '2160' ? { w: Math.round(2160 * v.w / v.h), h: 2160 } : { w: v.w * +sc * Math.min(2, window.devicePixelRatio || 1), h: v.h * +sc * Math.min(2, window.devicePixelRatio || 1) };
       sum.innerHTML = 'The picture on screen now, at <b>' + fmtTime(simT) + '</b> (layer ' + (job.layer[Math.min(curMove, job.moves - 1)] - layerOffset() + 1) + ')' +
-        (s ? ' · <b>' + Math.round(s.w) + '×' + Math.round(s.h) + '</b>' : ' · the whole window, as you see it');
+        (s ? ' \u00b7 <b>' + Math.round(s.w) + '\u00d7' + Math.round(s.h) + '</b>' : ' \u00b7 the whole window, as you see it') +
+        '<br>File size: <b id="xEst">estimating\u2026</b>';
       xs('xImgSize').disabled = what === 'window';
-      xs('xGo').disabled = false; return;
+      xs('xGo').disabled = false; scheduleEstimate(null); return;
     }
     const p = exportPlan();
     if (p.err) { sum.innerHTML = '<span class="warn">' + p.err + '</span>'; xs('xGo').disabled = true; return; }
@@ -1513,25 +1514,77 @@
     if (p.fmt === 'gif' && p.frames > 900) warn.push('A GIF this long is very large; MP4 is much smaller.');
     if (p.frames > 36000) warn.push('That is a lot of frames; consider a higher speed.');
     if (p.fmt !== 'gif' && !X.codecs[p.fmt]) warn.push(p.fmt.toUpperCase() + ' video is not supported here.');
-    sum.innerHTML = '<b>' + fmtTime(p.t0) + ' → ' + fmtTime(p.t1) + '</b> of the print at ' + (p.speed >= 10 ? Math.round(p.speed) : +p.speed.toFixed(2)) + '× → a <b>' +
-      fmtLong(p.length) + '</b> video · ' + p.frames + ' frames · ' + p.size.w + '×' + p.size.h +
-      (p.fmt === 'mp4' && X.codecs.mp4 === 'vp9' ? '<br><span class="warn">H.264 isn’t available on this system: the MP4 uses VP9 instead.</span>' : '') +
+    const cd = p.fmt === 'gif' ? null : X.codecs[p.fmt];
+    const notes = [];
+    if (cd && p.fmt === 'mp4' && cd.kind !== 'avc') notes.push('H.264 isn\u2019t available here: the MP4 uses ' + (cd.kind ? cd.kind.toUpperCase() : 'the system\u2019s codec') + ' instead.');
+    if (cd && cd.via === 'rec') notes.push('Recorded in real time: this takes at least ' + fmtLong(p.length) + '.');
+    sum.innerHTML = '<b>' + fmtTime(p.t0) + ' \u2192 ' + fmtTime(p.t1) + '</b> of the print at ' + (p.speed >= 10 ? Math.round(p.speed) : +p.speed.toFixed(2)) + '\u00d7 \u2192 a <b>' +
+      fmtLong(p.length) + '</b> video \u00b7 ' + p.frames + ' frames \u00b7 ' + p.size.w + '\u00d7' + p.size.h +
+      '<br>File size: <b id="xEst">' + (p.fmt === 'gif' ? 'estimating\u2026' : 'up to about ' + fmtBytes(videoBitrate(p) * p.length / 8)) + '</b>' +
+      (notes.length ? '<br>' + notes.join(' ') : '') +
       (warn.length ? '<br><span class="warn">' + warn.join(' ') + '</span>' : '');
     xs('xGo').disabled = p.fmt !== 'gif' && !X.codecs[p.fmt];
+    if (p.fmt === 'gif') scheduleEstimate(p);
   }
   // which encoders this browser has (checked once, at a common size)
+  /* What can encode video here. OrcaSlicer puts its page in WebView2 with NavigateToString, which is
+     not a secure context, so WebCodecs isn't there: then the canvas is recorded with MediaRecorder,
+     one frame at a time (see recordVideo). In a browser from file:// or https, WebCodecs is used. */
   async function probeCodecs() {
     if (X.codecs) return X.codecs;
     const c = { mp4: null, webm: null };
     if (typeof VideoEncoder === 'function') {
       const ok = async (codec) => { try { return (await VideoEncoder.isConfigSupported({ codec, width: 1280, height: 720, bitrate: 4e6, framerate: 30 })).supported; } catch (e) { return false; } };
-      if (await ok('avc1.640028') || await ok('avc1.42001f')) c.mp4 = 'avc'; else if (await ok('vp09.00.10.08')) c.mp4 = 'vp9';
-      if (await ok('vp09.00.10.08')) c.webm = 'vp9'; else if (await ok('vp8')) c.webm = 'vp8';
+      if (await ok('avc1.640028') || await ok('avc1.42001f')) c.mp4 = { via: 'wc', kind: 'avc' }; else if (await ok('vp09.00.10.08')) c.mp4 = { via: 'wc', kind: 'vp9' };
+      if (await ok('vp09.00.10.08')) c.webm = { via: 'wc', kind: 'vp9' }; else if (await ok('vp8')) c.webm = { via: 'wc', kind: 'vp8' };
+    }
+    if (typeof MediaRecorder === 'function' && typeof canvas.captureStream === 'function') {
+      const ok = (t) => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } };
+      if (!c.mp4) {
+        const t = ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4;codecs=avc3', 'video/mp4'].find(ok);
+        if (t) c.mp4 = { via: 'rec', mime: t, kind: /avc/.test(t) ? 'avc' : '' };
+      }
+      if (!c.webm) {
+        const t = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(ok);
+        if (t) c.webm = { via: 'rec', mime: t, kind: /vp8/.test(t) ? 'vp8' : 'vp9' };
+      }
     }
     X.codecs = c;
     for (const o of xs('xFmt').options) if (o.value !== 'gif') o.disabled = !c[o.value];
-    if (xs('xFmt').selectedOptions[0].disabled) xs('xFmt').value = c.webm ? 'webm' : 'gif';
+    if (xs('xFmt').selectedOptions[0].disabled) xs('xFmt').value = c.mp4 ? 'mp4' : c.webm ? 'webm' : 'gif';
     return c;
+  }
+  function fmtBytes(n) {
+    if (!(n > 0)) return '\u2013';
+    return n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' kB';
+  }
+  const videoBitrate = (p) => Math.max(2e6, Math.min(60e6, p.size.w * p.size.h * p.fps * 0.12));
+  /* GIF and picture sizes depend on the content, so encode one real frame to measure */
+  let estTimer = 0, estSeq = 0;
+  function scheduleEstimate(p) {
+    clearTimeout(estTimer);
+    const seq = ++estSeq;
+    estTimer = setTimeout(async () => {
+      if (X.running || !X.open) return;
+      let n = 0;
+      try {
+        if (p) {                                   // GIF: one frame (at most 480 px tall, scaled up) x the frame count
+          const { w, h } = p.size, sc = Math.min(1, 480 / h), sw = Math.max(2, Math.round(w * sc)), sh = Math.max(2, Math.round(h * sc));
+          const c2 = document.createElement('canvas'); c2.width = sw; c2.height = sh;
+          const g2 = c2.getContext('2d', { willReadFrequently: true });
+          renderAt(simT); g2.drawImage(canvas, 0, 0, sw, sh);
+          const data = g2.getImageData(0, 0, sw, sh).data, { GIFEncoder, quantize, applyPalette } = window.gifenc;
+          const enc = GIFEncoder(), pal = quantize(data, 256, { format: 'rgb565' });
+          enc.writeFrame(applyPalette(data, pal, 'rgb565'), sw, sh, { palette: pal }); enc.finish();
+          n = enc.bytes().length / (sc * sc) * p.frames;
+        } else {
+          const what = document.querySelector('input[name=xWhat]:checked').value;
+          n = (await captureImage(what, xs('xImgFmt').value, xs('xImgSize').value)).size;
+        }
+      } catch (e) { n = 0; }
+      if (seq !== estSeq || !xs('xEst')) return;
+      xs('xEst').textContent = n ? (p ? 'about ' : '') + fmtBytes(n) : '\u2013';
+    }, 250);
   }
   function setExportTab(tab) {
     X.tab = tab;
@@ -1548,7 +1601,7 @@
   async function openExport() {
     if (!job || X.running) return;
     setPlaying(false);
-    X.open = true; xs('expDlg').hidden = false; xs('xProg').hidden = true;
+    X.open = true; xs('expDlg').hidden = false; xs('xProg').hidden = true; showExportResult(null);
     const so = layerOffset(), n = job.layers.length - so, cur = job.layer[Math.min(curMove, job.moves - 1)] - so + 1;
     xs('xL0').max = xs('xL1').max = n;
     if (!xs('xL0').value) { xs('xL0').value = 1; xs('xL1').value = n; }
@@ -1617,7 +1670,7 @@
   async function encodeVideo(p) {
     const { w, h } = p.size, fps = p.fps, dtSim = p.speed / fps;
     const frameUs = 1e6 / fps;
-    const bitrate = Math.max(2e6, Math.min(60e6, w * h * fps * 0.12));
+    const bitrate = videoBitrate(p);
     if (p.fmt === 'gif') {
       const { GIFEncoder, quantize, applyPalette } = window.gifenc;
       const gif = GIFEncoder(), c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
@@ -1638,7 +1691,10 @@
       gif.finish();
       return new Blob([gif.bytes()], { type: 'image/gif' });
     }
-    const kind = X.codecs[p.fmt];
+    const cd = X.codecs[p.fmt];
+    if (!cd) throw new Error(p.fmt.toUpperCase() + ' video is not supported here.');
+    if (cd.via === 'rec') return recordVideo(p, cd, bitrate);
+    const kind = cd.kind;
     let codec, muxer, target;
     if (kind === 'avc') {
       const big = w * h > 1920 * 1088;
@@ -1683,6 +1739,50 @@
     return new Blob([target.buffer], { type: p.fmt === 'mp4' ? 'video/mp4' : 'video/webm' });
   }
 
+  /* MediaRecorder can't take frames with timestamps, so it is paced: each frame is rendered and copied
+     onto a plain 2D canvas while the recorder is paused, then the recorder runs for exactly one
+     frame's time on that still picture and pauses again. Paused time doesn't count, so the video's
+     timing is right however long a frame takes to render. */
+  async function recordVideo(p, cd, bitrate) {
+    const { w, h } = p.size, fps = p.fps, dtSim = p.speed / fps, frameMs = 1000 / fps;
+    const waitMs = (ms) => new Promise((r) => setTimeout(r, ms));
+    let rec = null, track = null, recErr = null;
+    const parts = [];
+    try {
+      await withRenderSizeAsync(w, h, async () => {
+        const still = document.createElement('canvas'); still.width = w; still.height = h;
+        const sg = still.getContext('2d');
+        renderAt(p.t0); sg.drawImage(canvas, 0, 0, w, h);
+        const stream = still.captureStream(0); track = stream.getVideoTracks()[0];
+        rec = new MediaRecorder(stream, { mimeType: cd.mime, videoBitsPerSecond: Math.round(bitrate) });
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
+        rec.onerror = (e) => { recErr = e.error || new Error('The recorder failed.'); };
+        rec.start(1000); rec.pause();
+        const t0 = performance.now();
+        for (let i = 0; i < p.frames; i++) {
+          if (X.cancel) throw new Error('cancelled');
+          if (recErr) throw recErr;
+          if (X.applySize) X.applySize();
+          renderAt(p.t0 + i * dtSim); sg.drawImage(canvas, 0, 0, w, h);
+          rec.resume();
+          track.requestFrame();
+          await waitMs(frameMs);
+          rec.pause();
+          if (i % 2 === 0) {
+            const left = (performance.now() - t0) / (i + 1) * (p.frames - i - 1) / 1000;
+            progress((i + 1) / p.frames, 'Frame ' + (i + 1) + ' of ' + p.frames + ' \u00b7 about ' + fmtLong(left) + ' left');
+          }
+        }
+        progress(1, 'Finishing\u2026');
+        await new Promise((r) => { rec.onstop = r; rec.stop(); });
+      });
+    } finally {
+      if (rec && rec.state !== 'inactive') { try { rec.stop(); } catch (e) { /* stopping anyway */ } }
+      if (track) track.stop();
+    }
+    if (recErr) throw recErr;
+    return new Blob(parts, { type: cd.mime.split(';')[0] });
+  }
   function canvasToBlob(c, type, q) { return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode the image.'))), type, q)); }
   async function captureImage(what, fmt, scale) {
     const type = 'image/' + fmt, q = fmt === 'png' ? undefined : 0.92;
@@ -1768,7 +1868,7 @@
       const w = await handle.createWritable(); await w.write(blob); await w.close();
       return 'Saved ' + handle.name;
     }
-    if (host) { const path = await saveViaPlugin(name, blob); return 'Saved to ' + path; }
+    if (host) { const path = await saveViaPlugin(name, blob); X.savedPath = path; return 'Saved to ' + path; }
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
     return 'Downloaded ' + name;
@@ -1784,7 +1884,7 @@
     // ask where to save first: the Save dialog has to open straight from the click
     const handle = await pickSaveTarget(name, ext);
     if (handle === 'cancelled') return;
-    X.running = true; X.cancel = false;
+    X.running = true; X.cancel = false; X.savedPath = null; showExportResult(null);
     const keep = { t: simT };
     xs('xProg').hidden = false; progress(0, isImg ? 'Capturing…' : 'Rendering…');
     xs('xGo').disabled = true; xs('xCancel').textContent = 'Stop';
@@ -1806,11 +1906,30 @@
       xs('xCancel').textContent = 'Cancel'; xs('xProg').hidden = true;
       updateExportSummary();
     }
-    toast(msg, isErr);
-    if (!isErr && msg !== 'Export stopped.') closeExport();
     X.last = { msg, isErr };
+    if (!isErr && msg !== 'Export stopped.' && !X.savedPath) { toast(msg); closeExport(); }
+    else showExportResult(msg, isErr, X.savedPath);
   }
   xs('xGo').onclick = runExport;
+  function showExportResult(msg, isErr, path) {
+    const r = xs('xResult');
+    if (!msg) { r.hidden = true; return; }
+    r.hidden = false; r.className = 'result' + (isErr ? ' err' : '');
+    xs('xResultText').textContent = path ? 'Saved into the plugin\u2019s exports folder (OrcaSlicer can\u2019t show a Save dialog here):' : msg;
+    xs('xResultPath').hidden = !path; xs('xCopy').hidden = !path;
+    if (path) xs('xResultPath').textContent = path;
+  }
+  xs('xCopy').onclick = async () => {
+    const t = xs('xResultPath').textContent;
+    let ok = false;
+    try { await navigator.clipboard.writeText(t); ok = true; } catch (e) {
+      const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+      try { ok = document.execCommand('copy'); } catch (e2) { ok = false; } ta.remove();
+    }
+    xs('xCopy').textContent = ok ? 'Copied' : 'Select and copy';
+    if (!ok) { const rg = document.createRange(); rg.selectNodeContents(xs('xResultPath')); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(rg); }
+    setTimeout(() => { xs('xCopy').textContent = 'Copy path'; }, 1600);
+  };
 
   window.PlaybackApp = { loadText, seek, setPlaying, get job() { return job; }, get time() { return simT; },
                          setPrefs(p) { Object.assign(prefs, p); syncOptionUI(); if (job) { if ("lines" in p) buildPaths(); else rebuildObjects(); computeColors(); if (R.main.userData.thin) R.main.geometry.attributes.color.needsUpdate = true; else R.main.geometry.setColors(R.col); updateScene(true); updateHud(); } },
