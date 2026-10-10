@@ -70,8 +70,14 @@ with sync_playwright() as p:
     f, last = run_export(pg)
     check('MP4 saved (' + str(codec) + ')', f is not None and f['name'].endswith('.mp4'), (f, last))
     if f:
-        m = pg.evaluate(PROBE, 1)
-        check('MP4 decodes: 3 s, 480p', abs(m['d'] - 3) < 0.15 and m['h'] == 480, m)
+        # this test browser has no H.264 decoder: check the file with ffprobe
+        import subprocess, json, tempfile
+        raw = base64.b64decode(pg.evaluate("()=>window.__saved[1].b64"))
+        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tf: tf.write(raw); path = tf.name
+        info = json.loads(subprocess.run(['ffprobe', '-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries',
+                                          'stream=codec_name,height,nb_read_frames:format=duration', '-of', 'json', path], capture_output=True, text=True).stdout)
+        os.unlink(path); st = info['streams'][0]
+        check('MP4 decodes: 45 frames (3 s), 480p', int(st['nb_read_frames']) == 45 and st['height'] == 480 and st['codec_name'] in ('h264', 'vp9'), st)
     # GIF
     pg.click('#expBtn'); pg.wait_for_timeout(200)
     pg.select_option('#xFmt', 'gif'); pg.select_option('#xSpeed', '25')

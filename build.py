@@ -22,14 +22,26 @@ VENDOR_FILES = [
 vendor = "\n;\n".join(p.read_text(encoding="utf-8") for p in VENDOR_FILES)
 vendor = "/* three.js r147 (MIT License, Copyright 2010-2022 Three.js Authors) */\n" + vendor
 
-# export: video muxers and the GIF encoder (all MIT, see README)
+# export: video muxers and encoders, the GIF encoder (see README for licences)
 NM = ROOT / "node_modules"
 gifenc = (NM / "gifenc/dist/gifenc.js").read_text(encoding="utf-8")   # CommonJS: give it an exports object
+def strip_map(js):
+    return "\n".join(l for l in js.split("\n") if not l.startswith("//# sourceMappingURL="))
+# an ES module: drop the export line, keep the factory it defines
+webm_glue = strip_map((NM / "webm-wasm/dist/webm-wasm.js").read_text(encoding="utf-8")).replace("export default Module;", "")
 EXPORT_LIBS = [
     "/* mp4-muxer 5.2.2 (MIT License, Copyright (c) 2023 Vanilagy) */\n" + (NM / "mp4-muxer/build/mp4-muxer.js").read_text(encoding="utf-8"),
     "/* webm-muxer 5.1.4 (MIT License, Copyright (c) 2022 Vanilagy) */\n" + (NM / "webm-muxer/build/webm-muxer.js").read_text(encoding="utf-8"),
     "/* gifenc 1.0.3 (MIT License, Copyright (c) 2017 Matt DesLauriers) */\n"
     "window.gifenc = (function () { var exports = {}, module = { exports: exports };\n" + gifenc + "\nreturn module.exports; })();",
+    # H.264 MP4 without WebCodecs (OrcaSlicer's page): minih264 (public domain) + libmp4v2 (MPL 1.1)
+    "/* h264-mp4-encoder 1.0.12 (MIT License, Copyright (c) 2020 Trevor Sundberg); includes minih264 (CC0/public domain)"
+    " and libmp4v2 (Mozilla Public License 1.1, source: https://github.com/TrevorSundberg/libmp4v2) */\n"
+    + strip_map((NM / "h264-mp4-encoder/embuild/dist/h264-mp4-encoder.web.js").read_text(encoding="utf-8")),
+    # VP8 WebM without WebCodecs: libvpx (BSD) + libwebm (BSD), wrapped by webm-wasm (Apache-2.0)
+    "/* webm-wasm 0.4.1 (Apache License 2.0, Copyright 2018 Google Inc.); includes libvpx and libwebm (BSD-3-Clause) */\n"
+    "window.webmWasmFactory = (function () {\n" + webm_glue + "\nreturn Module; })();\n"
+    "window.WEBM_WASM_B64 = '" + base64.b64encode((NM / "webm-wasm/dist/webm-wasm.wasm").read_bytes()).decode("ascii") + "';",
 ]
 vendor = vendor + "\n;\n" + "\n;\n".join(EXPORT_LIBS)
 import json as _json

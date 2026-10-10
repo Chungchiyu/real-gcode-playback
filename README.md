@@ -38,7 +38,7 @@ Without it, **Latest slice** reads OrcaSlicer's temporary G-code instead, and Or
 
 - Read-only: never changes your G-code or model.
 - No network access, and no files written outside the plugin's own folder.
-- Exports: OrcaSlicer's page can't open a Save dialog, so videos and pictures are saved into the plugin's own `exports` folder, and the Export dialog shows the full path with a Copy button. Videos are rendered frame by frame, so their timing is exact however fast the computer is. Inside OrcaSlicer they are recorded in real time (a 30 s video takes at least 30 s); opened in a browser, they are encoded faster than real time. MP4 uses H.264 when the system has it.
+- Exports: OrcaSlicer's page can't open a Save dialog, so videos and pictures are saved into the plugin's own `exports` folder, and the Export dialog shows the full path with a Copy button. Videos are rendered and encoded frame by frame, so their length, frame count and size are exactly what the dialog says, however fast the computer is. Inside OrcaSlicer the bundled WebAssembly encoders are used (H.264 for MP4, VP8 for WebM; about 10 frames a second at 1080p); in a browser that has WebCodecs, the graphics card's encoder.
 - No extra Python packages to install.
 - Heating time is not counted. Bed leveling counts as 260 s, as in OrcaSlicer's estimate.
 - On Linux, OrcaSlicer's plugin sandbox blocks paths containing `conf` (its data folder is `~/.config/OrcaSlicer`), so Playback capture cannot work there; use Latest slice or open a file.
@@ -90,4 +90,4 @@ One-time setup: create a fine-grained personal access token for this repository 
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Bundles, all under the MIT License: [three.js](https://threejs.org) r147 (Copyright 2010-2022 Three.js Authors), [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) 5.2.2 and [webm-muxer](https://github.com/Vanilagy/webm-muxer) 5.1.4 (Copyright 2022-2023 Vanilagy), [gifenc](https://github.com/mattdesl/gifenc) 1.0.3 (Copyright 2017 Matt DesLauriers).
+MIT, see [LICENSE](LICENSE). Bundles, all under the MIT License: [three.js](https://threejs.org) r147 (Copyright 2010-2022 Three.js Authors), [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) 5.2.2 and [webm-muxer](https://github.com/Vanilagy/webm-muxer) 5.1.4 (Copyright 2022-2023 Vanilagy), [gifenc](https://github.com/mattdesl/gifenc) 1.0.3 (Copyright 2017 Matt DesLauriers), [h264-mp4-encoder](https://github.com/TrevorSundberg/h264-mp4-encoder) 1.0.12 (Copyright 2020 Trevor Sundberg). Also bundles [webm-wasm](https://github.com/GoogleChromeLabs/webm-wasm) 0.4.1 (Apache License 2.0, Copyright 2018 Google), which includes libvpx and libwebm (BSD-3-Clause); h264-mp4-encoder includes minih264 (public domain) and libmp4v2 (Mozilla Public License 1.1, source at https://github.com/TrevorSundberg/libmp4v2).

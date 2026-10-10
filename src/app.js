@@ -1516,8 +1516,11 @@
     if (p.fmt !== 'gif' && !X.codecs[p.fmt]) warn.push(p.fmt.toUpperCase() + ' video is not supported here.');
     const cd = p.fmt === 'gif' ? null : X.codecs[p.fmt];
     const notes = [];
-    if (cd && p.fmt === 'mp4' && cd.kind !== 'avc') notes.push('H.264 isn\u2019t available here: the MP4 uses ' + (cd.kind ? cd.kind.toUpperCase() : 'the system\u2019s codec') + ' instead.');
-    if (cd && cd.via === 'rec') notes.push('Recorded in real time: this takes at least ' + fmtLong(p.length) + '.');
+    if (cd && cd.via !== 'wc') {
+      // the bundled encoders manage roughly 10 frames a second at 1080p, scaling with the pixel count
+      const secs = p.frames * (p.size.w * p.size.h) / (1920 * 1080) / (cd.via === 'h264' ? 10 : 8) + p.frames * 0.01;
+      notes.push('Encoded by the plugin, frame by frame: takes about ' + fmtLong(Math.max(1, secs)) + '.');
+    }
     sum.innerHTML = '<b>' + fmtTime(p.t0) + ' \u2192 ' + fmtTime(p.t1) + '</b> of the print at ' + (p.speed >= 10 ? Math.round(p.speed) : +p.speed.toFixed(2)) + '\u00d7 \u2192 a <b>' +
       fmtLong(p.length) + '</b> video \u00b7 ' + p.frames + ' frames \u00b7 ' + p.size.w + '\u00d7' + p.size.h +
       '<br>File size: <b id="xEst">' + (p.fmt === 'gif' ? 'estimating\u2026' : 'up to about ' + fmtBytes(videoBitrate(p) * p.length / 8)) + '</b>' +
@@ -1527,28 +1530,21 @@
     if (p.fmt === 'gif') scheduleEstimate(p);
   }
   // which encoders this browser has (checked once, at a common size)
-  /* What can encode video here. OrcaSlicer puts its page in WebView2 with NavigateToString, which is
-     not a secure context, so WebCodecs isn't there: then the canvas is recorded with MediaRecorder,
-     one frame at a time (see recordVideo). In a browser from file:// or https, WebCodecs is used. */
+  /* What can encode video here. In a browser opened from file:// or https, WebCodecs (fast, using the
+     graphics card). OrcaSlicer puts its page into WebView2 with NavigateToString, which is not a
+     secure context, so WebCodecs isn't there: then the bundled WebAssembly encoders take the frames,
+     H.264 for MP4 (minih264) and VP8 for WebM (libvpx). Either way every frame is rendered and
+     handed over one by one, so length, frame count and size are exactly what the dialog says. */
   async function probeCodecs() {
     if (X.codecs) return X.codecs;
     const c = { mp4: null, webm: null };
     if (typeof VideoEncoder === 'function') {
       const ok = async (codec) => { try { return (await VideoEncoder.isConfigSupported({ codec, width: 1280, height: 720, bitrate: 4e6, framerate: 30 })).supported; } catch (e) { return false; } };
-      if (await ok('avc1.640028') || await ok('avc1.42001f')) c.mp4 = { via: 'wc', kind: 'avc' }; else if (await ok('vp09.00.10.08')) c.mp4 = { via: 'wc', kind: 'vp9' };
+      if (await ok('avc1.640028') || await ok('avc1.42001f')) c.mp4 = { via: 'wc', kind: 'avc' };
       if (await ok('vp09.00.10.08')) c.webm = { via: 'wc', kind: 'vp9' }; else if (await ok('vp8')) c.webm = { via: 'wc', kind: 'vp8' };
     }
-    if (typeof MediaRecorder === 'function' && typeof canvas.captureStream === 'function') {
-      const ok = (t) => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } };
-      if (!c.mp4) {
-        const t = ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4;codecs=avc3', 'video/mp4'].find(ok);
-        if (t) c.mp4 = { via: 'rec', mime: t, kind: /avc/.test(t) ? 'avc' : '' };
-      }
-      if (!c.webm) {
-        const t = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(ok);
-        if (t) c.webm = { via: 'rec', mime: t, kind: /vp8/.test(t) ? 'vp8' : 'vp9' };
-      }
-    }
+    if (!c.mp4 && window.HME) c.mp4 = { via: 'h264', kind: 'avc' };
+    if (!c.webm && window.webmWasmFactory && window.WEBM_WASM_B64) c.webm = { via: 'vpx', kind: 'vp8' };
     X.codecs = c;
     for (const o of xs('xFmt').options) if (o.value !== 'gif') o.disabled = !c[o.value];
     if (xs('xFmt').selectedOptions[0].disabled) xs('xFmt').value = c.mp4 ? 'mp4' : c.webm ? 'webm' : 'gif';
@@ -1693,7 +1689,7 @@
     }
     const cd = X.codecs[p.fmt];
     if (!cd) throw new Error(p.fmt.toUpperCase() + ' video is not supported here.');
-    if (cd.via === 'rec') return recordVideo(p, cd, bitrate);
+    if (cd.via === 'h264' || cd.via === 'vpx') return encodeWasm(p, cd, bitrate);
     const kind = cd.kind;
     let codec, muxer, target;
     if (kind === 'avc') {
@@ -1739,49 +1735,61 @@
     return new Blob([target.buffer], { type: p.fmt === 'mp4' ? 'video/mp4' : 'video/webm' });
   }
 
-  /* MediaRecorder can't take frames with timestamps, so it is paced: each frame is rendered and copied
-     onto a plain 2D canvas while the recorder is paused, then the recorder runs for exactly one
-     frame's time on that still picture and pauses again. Paused time doesn't count, so the video's
-     timing is right however long a frame takes to render. */
-  async function recordVideo(p, cd, bitrate) {
-    const { w, h } = p.size, fps = p.fps, dtSim = p.speed / fps, frameMs = 1000 / fps;
-    const waitMs = (ms) => new Promise((r) => setTimeout(r, ms));
-    let rec = null, track = null, recErr = null;
-    const parts = [];
+  /* The bundled encoders take raw RGBA pixels: render each frame, read it back through a 2D canvas,
+     hand it over. H.264 MP4 via h264-mp4-encoder (minih264 + libmp4v2), VP8 WebM via webm-wasm
+     (libvpx + libwebm). Both run on the main thread, so the loop yields after every frame. */
+  let vpxModule = null;
+  function loadVpx() {
+    if (vpxModule) return vpxModule;
+    vpxModule = new Promise((resolve, reject) => {
+      try {
+        const bin = Uint8Array.from(atob(window.WEBM_WASM_B64), (ch) => ch.charCodeAt(0));
+        const m = window.webmWasmFactory({ noInitialRun: true, wasmBinary: bin,
+          onRuntimeInitialized() { delete m.then; resolve(m); }, onAbort(e) { reject(new Error('The WebM encoder could not start: ' + e)); } });
+      } catch (e) { reject(e); }
+    });
+    vpxModule.catch(() => { vpxModule = null; });
+    return vpxModule;
+  }
+  async function encodeWasm(p, cd, bitrate) {
+    const { w, h } = p.size, fps = p.fps, dtSim = p.speed / fps, kbps = Math.max(300, Math.round(bitrate / 1000));
+    const c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
+    const g2 = c2.getContext('2d', { willReadFrequently: true });
+    let addFrame, finish, cleanup;
+    if (cd.via === 'h264') {
+      const enc = await window.HME.createH264MP4Encoder();
+      // speed 0..10: 10 is ~11 fps at 1080p in WebAssembly; the bitrate keeps quality, so go fast for big frames
+      enc.width = w; enc.height = h; enc.frameRate = fps; enc.kbps = kbps; enc.speed = w * h > 1280 * 720 ? 10 : 7;
+      enc.groupOfPictures = Math.max(1, Math.round(fps * 2));
+      enc.initialize();
+      addFrame = (px) => enc.addFrameRgba(px);
+      finish = () => { enc.finalize(); const out = enc.FS.readFile(enc.outputFilename); try { enc.FS.unlink(enc.outputFilename); } catch (e) { /* gone */ } return new Blob([out], { type: 'video/mp4' }); };
+      cleanup = () => { try { enc.delete(); } catch (e) { /* already freed */ } };
+    } else {
+      const m = await loadVpx(), parts = [];
+      const enc = new m.WebmEncoder(1, fps, w, h, kbps, true, false, (chunk) => parts.push(new Uint8Array(chunk)));
+      const err = enc.lastError(); if (err) { enc.delete(); throw new Error('WebM encoder: ' + err); }
+      addFrame = (px) => { if (!enc.addRGBAFrame(px)) throw new Error('WebM encoder: ' + enc.lastError()); };
+      finish = () => { enc.finalize(); return new Blob(parts, { type: 'video/webm' }); };
+      cleanup = () => { try { enc.delete(); } catch (e) { /* already freed */ } };
+    }
     try {
+      const t0 = performance.now();
       await withRenderSizeAsync(w, h, async () => {
-        const still = document.createElement('canvas'); still.width = w; still.height = h;
-        const sg = still.getContext('2d');
-        renderAt(p.t0); sg.drawImage(canvas, 0, 0, w, h);
-        const stream = still.captureStream(0); track = stream.getVideoTracks()[0];
-        rec = new MediaRecorder(stream, { mimeType: cd.mime, videoBitsPerSecond: Math.round(bitrate) });
-        rec.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
-        rec.onerror = (e) => { recErr = e.error || new Error('The recorder failed.'); };
-        rec.start(1000); rec.pause();
-        const t0 = performance.now();
         for (let i = 0; i < p.frames; i++) {
           if (X.cancel) throw new Error('cancelled');
-          if (recErr) throw recErr;
           if (X.applySize) X.applySize();
-          renderAt(p.t0 + i * dtSim); sg.drawImage(canvas, 0, 0, w, h);
-          rec.resume();
-          track.requestFrame();
-          await waitMs(frameMs);
-          rec.pause();
-          if (i % 2 === 0) {
-            const left = (performance.now() - t0) / (i + 1) * (p.frames - i - 1) / 1000;
-            progress((i + 1) / p.frames, 'Frame ' + (i + 1) + ' of ' + p.frames + ' \u00b7 about ' + fmtLong(left) + ' left');
-          }
+          renderAt(p.t0 + i * dtSim);
+          g2.drawImage(canvas, 0, 0, w, h);
+          addFrame(g2.getImageData(0, 0, w, h).data);
+          const left = (performance.now() - t0) / (i + 1) * (p.frames - i - 1) / 1000;
+          progress((i + 1) / p.frames, 'Frame ' + (i + 1) + ' of ' + p.frames + (i > 4 ? ' \u00b7 about ' + fmtLong(left) + ' left' : ''));
+          await sleep0();
         }
-        progress(1, 'Finishing\u2026');
-        await new Promise((r) => { rec.onstop = r; rec.stop(); });
       });
-    } finally {
-      if (rec && rec.state !== 'inactive') { try { rec.stop(); } catch (e) { /* stopping anyway */ } }
-      if (track) track.stop();
-    }
-    if (recErr) throw recErr;
-    return new Blob(parts, { type: cd.mime.split(';')[0] });
+      progress(1, 'Finishing\u2026'); await sleep0();
+      return finish();
+    } finally { cleanup(); }
   }
   function canvasToBlob(c, type, q) { return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode the image.'))), type, q)); }
   async function captureImage(what, fmt, scale) {
