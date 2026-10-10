@@ -34,6 +34,11 @@ EXPORT_LIBS = [
     "/* webm-muxer 5.1.4 (MIT License, Copyright (c) 2022 Vanilagy) */\n" + (NM / "webm-muxer/build/webm-muxer.js").read_text(encoding="utf-8"),
     "/* gifenc 1.0.3 (MIT License, Copyright (c) 2017 Matt DesLauriers) */\n"
     "window.gifenc = (function () { var exports = {}, module = { exports: exports };\n" + gifenc + "\nreturn module.exports; })();",
+]
+# The video encoders are big (~2 MB). OrcaSlicer loads the page with WebView2's NavigateToString,
+# which takes at most 2 MB of HTML, so in the plugin they are not part of the page: the page asks
+# the plugin for them the first time an MP4/WebM is exported. The standalone page has them inline.
+ENCODER_LIBS = [
     # H.264 MP4 without WebCodecs (OrcaSlicer's page): minih264 (public domain) + libmp4v2 (MPL 1.1)
     "/* h264-mp4-encoder 1.0.12 (MIT License, Copyright (c) 2020 Trevor Sundberg); includes minih264 (CC0/public domain)"
     " and libmp4v2 (Mozilla Public License 1.1, source: https://github.com/TrevorSundberg/libmp4v2) */\n"
@@ -44,6 +49,8 @@ EXPORT_LIBS = [
     "window.WEBM_WASM_B64 = '" + base64.b64encode((NM / "webm-wasm/dist/webm-wasm.wasm").read_bytes()).decode("ascii") + "';",
 ]
 vendor = vendor + "\n;\n" + "\n;\n".join(EXPORT_LIBS)
+encoders = "\n;\n".join(ENCODER_LIBS)
+assert "</script" not in encoders.lower(), "encoders contain a closing script tag"
 import json as _json
 core = (SRC / "core.js").read_text(encoding="utf-8")
 core = "window.PLAYBACK_ABOUT = " + _json.dumps(_json.loads((SRC / "changelog.json").read_text(encoding="utf-8")), ensure_ascii=False) + ";\n" + core
@@ -60,13 +67,18 @@ def assemble(vendor_js):
                 .replace("/*@@APP@@*/", app))
 
 
-(DIST / "playback.html").write_text(assemble(vendor), encoding="utf-8")
+(DIST / "playback.html").write_text(assemble(vendor + "\n;\n" + encoders), encoding="utf-8")
 
 # ---- plugin: the page template and app code stay readable; three.js ships compressed
 template = page.replace("/*@@CORE@@*/", core).replace("/*@@APP@@*/", app)
 assert "'''" not in template and '"""' not in template
 vendor_b64 = base64.b64encode(zlib.compress(vendor.encode("utf-8"), 9)).decode("ascii")
 vendor_wrapped = "\n".join(vendor_b64[i:i + 100] for i in range(0, len(vendor_b64), 100))
+enc_b64 = base64.b64encode(zlib.compress(encoders.encode("utf-8"), 9)).decode("ascii")
+enc_wrapped = "\n".join(enc_b64[i:i + 100] for i in range(0, len(enc_b64), 100))
+page_bytes = len(template.replace("/*@@VENDOR@@*/", vendor, 1).encode("utf-8"))
+PAGE_LIMIT = 1_900_000      # WebView2 NavigateToString refuses more than 2 MB; keep a margin
+assert page_bytes < PAGE_LIMIT, f"the plugin page is {page_bytes} bytes; WebView2 loads at most 2 MB"
 
 import json
 log = json.loads((SRC / "changelog.json").read_text(encoding="utf-8"))
@@ -75,8 +87,8 @@ plugin = (SRC / "plugin.py").read_text(encoding="utf-8")
 plugin = (plugin.replace("@@VERSION@@", log["version"])
                 .replace("@@CHANGELOG_TEXT@@", log_text)
                 .replace("@@CHANGELOG_JSON@@", json.dumps(log, ensure_ascii=False, indent=1)))
-plugin = plugin.replace("@@PAGE_TEMPLATE@@", template).replace("@@VENDOR_B64@@", vendor_wrapped)
+plugin = plugin.replace("@@PAGE_TEMPLATE@@", template).replace("@@VENDOR_B64@@", vendor_wrapped).replace("@@ENCODERS_B64@@", enc_wrapped)
 out = DIST / "orca_playback.py"
 out.write_text(plugin, encoding="utf-8")
 print("wrote", DIST / "playback.html", (DIST / "playback.html").stat().st_size, "bytes")
-print("wrote", out, out.stat().st_size, "bytes")
+print("wrote", out, out.stat().st_size, "bytes; its page is", page_bytes, "bytes (limit 2 MB)")

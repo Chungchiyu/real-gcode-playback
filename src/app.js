@@ -1363,6 +1363,7 @@
     if (!msg || typeof msg !== 'object') return;
     switch (msg.cmd) {
       case 'saved': onSaved(msg); break;
+      case 'lib_begin': case 'lib_chunk': case 'lib_end': onLibMessage(msg); break;
       case 'status': {
         if (msg.prefs && typeof msg.prefs === 'object') { Object.assign(prefs, msg.prefs); syncOptionUI(); }
         renderSetup(msg);
@@ -1543,8 +1544,9 @@
       if (await ok('avc1.640028') || await ok('avc1.42001f')) c.mp4 = { via: 'wc', kind: 'avc' };
       if (await ok('vp09.00.10.08')) c.webm = { via: 'wc', kind: 'vp9' }; else if (await ok('vp8')) c.webm = { via: 'wc', kind: 'vp8' };
     }
-    if (!c.mp4 && window.HME) c.mp4 = { via: 'h264', kind: 'avc' };
-    if (!c.webm && window.webmWasmFactory && window.WEBM_WASM_B64) c.webm = { via: 'vpx', kind: 'vp8' };
+    // the encoders are inline in the standalone page, and come from the plugin on request in OrcaSlicer
+    if (!c.mp4 && (window.HME || host)) c.mp4 = { via: 'h264', kind: 'avc' };
+    if (!c.webm && ((window.webmWasmFactory && window.WEBM_WASM_B64) || host)) c.webm = { via: 'vpx', kind: 'vp8' };
     X.codecs = c;
     for (const o of xs('xFmt').options) if (o.value !== 'gif') o.disabled = !c[o.value];
     if (xs('xFmt').selectedOptions[0].disabled) xs('xFmt').value = c.mp4 ? 'mp4' : c.webm ? 'webm' : 'gif';
@@ -1738,6 +1740,35 @@
   /* The bundled encoders take raw RGBA pixels: render each frame, read it back through a 2D canvas,
      hand it over. H.264 MP4 via h264-mp4-encoder (minih264 + libmp4v2), VP8 WebM via webm-wasm
      (libvpx + libwebm). Both run on the main thread, so the loop yields after every frame. */
+  let encodersReady = null;
+  const libLoads = new Map();
+  function ensureEncoders() {
+    if (window.HME && window.webmWasmFactory) return Promise.resolve();
+    if (encodersReady) return encodersReady;
+    if (!host) return Promise.reject(new Error('The video encoders are not available.'));
+    encodersReady = new Promise((resolve, reject) => {
+      const id = 'e' + Date.now().toString(36);
+      const timer = setTimeout(() => { libLoads.delete(id); reject(new Error('The plugin did not send the video encoders.')); }, 60000);
+      libLoads.set(id, { parts: null, got: 0, resolve: (code) => {
+        clearTimeout(timer);
+        try { const sc = document.createElement('script'); sc.text = code; document.head.appendChild(sc); sc.remove(); } catch (e) { reject(e); return; }
+        if (window.HME && window.webmWasmFactory) resolve(); else reject(new Error('The video encoders did not load.'));
+      }, reject: (e) => { clearTimeout(timer); reject(e); } });
+      send({ cmd: 'load_encoders', id });
+    });
+    encodersReady.catch(() => { encodersReady = null; });
+    return encodersReady;
+  }
+  function onLibMessage(msg) {
+    const L = libLoads.get(msg.id); if (!L) return;
+    if (msg.cmd === 'lib_begin') { L.parts = new Array(msg.chunks); L.got = 0; }
+    else if (msg.cmd === 'lib_chunk' && L.parts) { L.parts[msg.i] = msg.data; L.got++; progress(L.got / L.parts.length * 0.5, 'Loading the video encoder\u2026'); }
+    else if (msg.cmd === 'lib_end') {
+      libLoads.delete(msg.id);
+      if (msg.error || !L.parts || L.got !== L.parts.length) L.reject(new Error(msg.error || 'The video encoder arrived incomplete.'));
+      else L.resolve(L.parts.join(''));
+    }
+  }
   let vpxModule = null;
   function loadVpx() {
     if (vpxModule) return vpxModule;
@@ -1753,6 +1784,8 @@
   }
   async function encodeWasm(p, cd, bitrate) {
     const { w, h } = p.size, fps = p.fps, dtSim = p.speed / fps, kbps = Math.max(300, Math.round(bitrate / 1000));
+    progress(0, 'Loading the video encoder\u2026');
+    await ensureEncoders();
     const c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
     const g2 = c2.getContext('2d', { willReadFrequently: true });
     let addFrame, finish, cleanup;

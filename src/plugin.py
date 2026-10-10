@@ -88,6 +88,13 @@ VENDOR_B64 = """
 """
 
 
+# MP4/WebM encoders (WebAssembly), sent to the page on request: they would push the page past the
+# 2 MB that WebView2's NavigateToString accepts
+ENCODERS_B64 = """
+@@ENCODERS_B64@@
+"""
+
+
 def page_html():
     """Three.js ships compressed in this file; the page template and app code stay readable."""
     global _PAGE_HTML
@@ -256,6 +263,8 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                 if not self.loading:
                     self.loading = True
                     threading.Thread(target=self.send_latest, args=(bool(msg.get("quiet")),), daemon=True).start()
+            elif cmd == "load_encoders":
+                threading.Thread(target=self.send_encoders, args=(str(msg.get("id", ""))[:40],), daemon=True).start()
             elif cmd in ("save_begin", "save_chunk", "save_end"):
                 self.on_save(cmd, msg)
             elif cmd == "save_prefs":
@@ -265,6 +274,18 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                     self.save_config(json.dumps({"prefs": clean}))
         except Exception as exc:
             self.post({"cmd": "error", "message": str(exc)[:300]})
+
+    # ---- export: the video encoders, in parts (they are too big for the page itself)
+    def send_encoders(self, rid):
+        try:
+            text = zlib.decompress(base64.b64decode("".join(ENCODERS_B64.split()))).decode("utf-8")
+            parts = [text[i:i + CHUNK_CHARS] for i in range(0, len(text), CHUNK_CHARS)] or [""]
+            self.post({"cmd": "lib_begin", "id": rid, "chunks": len(parts)})
+            for index, part in enumerate(parts):
+                self.post({"cmd": "lib_chunk", "id": rid, "i": index, "data": part})
+            self.post({"cmd": "lib_end", "id": rid})
+        except Exception as exc:
+            self.post({"cmd": "lib_end", "id": rid, "error": str(exc)[:300]})
 
     # ---- export: the page sends a finished file in base64 chunks -------------
     def on_save(self, cmd, msg):
