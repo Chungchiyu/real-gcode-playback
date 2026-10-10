@@ -17,6 +17,7 @@ Each move is timed by a motion planner that models acceleration and cornering. T
 - Moving-bed view for bed slingers such as the Bambu Lab A1 and A1 mini
 - Picks up each new slice when you open the tab, and asks before replacing one you're already viewing
 - Pauses when you leave the tab (optional)
+- Export: videos (MP4, WebM, GIF) of the whole print, the current layer, a range of layers, the time between two events or any time span, at a chosen speed, size and frame rate; pictures (PNG, JPEG, WebP) of the 3D view or of the whole window with its panels
 - Also opens `.gcode` and `.gcode.3mf` files directly
 
 ## Install
@@ -37,6 +38,7 @@ Without it, **Latest slice** reads OrcaSlicer's temporary G-code instead, and Or
 
 - Read-only: never changes your G-code or model.
 - No network access, and no files written outside the plugin's own folder.
+- Exports are saved with the system's Save dialog where OrcaSlicer's page has one (Windows). Elsewhere they go into the plugin's own `exports` folder, and the path is shown after saving. Videos are rendered frame by frame, so their timing is exact however fast the computer is; MP4 uses H.264 when the system has an encoder for it, otherwise VP9.
 - No extra Python packages to install.
 - Heating time is not counted. Bed leveling counts as 260 s, as in OrcaSlicer's estimate.
 - On Linux, OrcaSlicer's plugin sandbox blocks paths containing `conf` (its data folder is `~/.config/OrcaSlicer`), so Playback capture cannot work there; use Latest slice or open a file.
@@ -59,7 +61,7 @@ test/            G-code generators, node tests, Playwright tests with a mock `or
 Build:
 
 ```
-npm install          # three.js r147, used only at build time
+npm install          # three.js r147 and the export libraries, used only at build time
 python3 build.py     # writes dist/orca_playback.py and dist/playback.html
 ```
 
@@ -88,4 +90,4 @@ One-time setup: create a fine-grained personal access token for this repository 
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Bundles [three.js](https://threejs.org) r147 (MIT License, Copyright 2010-2022 Three.js Authors).
+MIT, see [LICENSE](LICENSE). Bundles, all under the MIT License: [three.js](https://threejs.org) r147 (Copyright 2010-2022 Three.js Authors), [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) 5.2.2 and [webm-muxer](https://github.com/Vanilagy/webm-muxer) 5.1.4 (Copyright 2022-2023 Vanilagy), [gifenc](https://github.com/mattdesl/gifenc) 1.0.3 (Copyright 2017 Matt DesLauriers).

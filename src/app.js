@@ -1026,7 +1026,9 @@
   document.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (X.open) return;
     switch (e.key) {
+      case 'e': case 'E': if (job) { e.preventDefault(); openExport(); } break;
       case ' ': e.preventDefault(); setPlaying(!playing); break;
       case 'ArrowRight': e.preventDefault(); stepMove(1); break;
       case 'ArrowLeft': e.preventDefault(); stepMove(-1); break;
@@ -1232,7 +1234,7 @@
     buildBed(job.bed);
     buildPaths();
     $('empty').style.display = 'none';
-    $('hud').hidden = false; $('viewbtns').hidden = false; $('legend').hidden = false;
+    $('hud').hidden = false; $('viewbtns').hidden = false; $('legend').hidden = false; $('expBtn').disabled = false;
     $('fileName').textContent = meta.name || 'G-code';
     const so = job.layers[0] && job.layers[0].start ? 1 : 0;
     $('fileInfo').textContent = (job.layers.length - so) + ' layers · ' + (job.moves / 1000).toFixed(job.moves > 1e5 ? 0 : 1) + 'k moves' +
@@ -1360,6 +1362,7 @@
     function onHostMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     switch (msg.cmd) {
+      case 'saved': onSaved(msg); break;
       case 'status': {
         if (msg.prefs && typeof msg.prefs === 'object') { Object.assign(prefs, msg.prefs); syncOptionUI(); }
         renderSetup(msg);
@@ -1419,6 +1422,396 @@
   requestAnimationFrame(loop);
   send({ cmd: 'hello' });
   // test hook: standalone page can be driven from the console / a harness
+  /* ------------------------------------------------------------------ export: video and images
+     Frames are rendered one by one at the chosen size and time step (not recorded off the screen),
+     so a video has exact timing whatever the computer's speed. MP4 and WebM go through WebCodecs and
+     a muxer; GIF through gifenc. "Whole window" images draw the page itself into an SVG
+     foreignObject, with the 3D view and the timeline pasted in as pictures. */
+  const X = { open: false, tab: 'video', running: false, cancel: false };
+  const xs = (id) => $(id);
+  function parseClock(str) {
+    const t = String(str || '').trim(); if (!t) return NaN;
+    if (/^\d+(\.\d+)?$/.test(t)) return parseFloat(t);
+    const p = t.split(':').map(Number); if (p.some((v) => !isFinite(v) || v < 0)) return NaN;
+    return p.reduce((a, v) => a * 60 + v, 0);
+  }
+  const moveTime = (k) => (k < job.moves ? job.t0[k] : job.total);
+  const layerOffset = () => (job.layers[0] && job.layers[0].start ? 1 : 0);
+  function exportEvents() {
+    const list = [{ t: 0, label: 'Start of print' }];
+    for (const ev of job.events) list.push({ t: moveTime(ev.move), label: ev.label });
+    list.push({ t: job.total, label: 'End of print' });
+    return list;
+  }
+  function fillEventSelects() {
+    const ev = exportEvents();
+    const html = ev.map((e, i) => '<option value="' + i + '">' + fmtTime(e.t) + ' · ' + e.label.replace(/</g, '&lt;') + '</option>').join('');
+    xs('xEv0').innerHTML = html; xs('xEv1').innerHTML = html;
+    xs('xEv0').value = '0'; xs('xEv1').value = String(ev.length - 1);
+    X.events = ev;
+  }
+  // the time range [t0, t1] the dialog describes, or null with a reason
+  function exportRange() {
+    const mode = xs('xRange').value, so = layerOffset();
+    let t0 = 0, t1 = job.total;
+    if (mode === 'layer') {
+      const L = job.layers[job.layer[Math.min(curMove, job.moves - 1)]]; t0 = L.t0; t1 = L.t1;
+    } else if (mode === 'layers') {
+      const n = job.layers.length - so;
+      let a = Math.round(+xs('xL0').value), b = Math.round(+xs('xL1').value);
+      if (!(a >= 1 && a <= n) || !(b >= 1 && b <= n)) return { err: 'Layers go from 1 to ' + n + '.' };
+      if (b < a) [a, b] = [b, a];
+      t0 = job.layers[a - 1 + so].t0; t1 = job.layers[b - 1 + so].t1;
+    } else if (mode === 'events') {
+      const ev = X.events || exportEvents();
+      let a = ev[+xs('xEv0').value], b = ev[+xs('xEv1').value];
+      if (!a || !b) return { err: 'Pick two events.' };
+      t0 = Math.min(a.t, b.t); t1 = Math.max(a.t, b.t);
+    } else if (mode === 'time') {
+      const a = parseClock(xs('xT0').value), b = parseClock(xs('xT1').value);
+      xs('xT0').classList.toggle('bad', !(a >= 0)); xs('xT1').classList.toggle('bad', !(b >= 0));
+      if (!(a >= 0) || !(b >= 0)) return { err: 'Times look like 1:23 or 1:02:03.' };
+      t0 = Math.min(a, b); t1 = Math.min(job.total, Math.max(a, b));
+    }
+    t0 = Math.max(0, Math.min(job.total, t0)); t1 = Math.max(0, Math.min(job.total, t1));
+    if (t1 - t0 < 0.05) return { err: 'That range is empty.' };
+    return { t0, t1 };
+  }
+  function viewSize() { const r = canvas.getBoundingClientRect(); return { w: Math.max(2, Math.round(r.width)), h: Math.max(2, Math.round(r.height)) }; }
+  function exportSize(sel, fmt) {
+    const v = viewSize(), aspect = v.w / v.h;
+    let h = sel === 'window' ? Math.round(v.h * Math.min(2, window.devicePixelRatio || 1)) : +sel;
+    if (fmt === 'gif' && sel === 'window') h = Math.min(h, 480);
+    let w = Math.round(h * aspect);
+    w -= w % 2; h -= h % 2;                       // encoders want even sizes
+    return { w: Math.max(2, w), h: Math.max(2, h) };
+  }
+  function exportPlan() {
+    const r = exportRange(); if (r.err) return r;
+    const fmt = xs('xFmt').value, fps = +xs('xFps').value, sp = xs('xSpeed').value;
+    const span = r.t1 - r.t0;
+    const speed = sp.startsWith('fit') ? Math.max(span / +sp.slice(3), 1e-3) : +sp;
+    const length = span / speed, frames = Math.max(1, Math.round(length * fps));
+    const size = exportSize(xs('xSize').value, fmt);
+    return Object.assign(r, { fmt, fps, speed, length, frames, size });
+  }
+  function updateExportSummary() {
+    if (!job) return;
+    const sum = xs('xSum');
+    if (X.tab === 'image') {
+      const what = document.querySelector('input[name=xWhat]:checked').value;
+      const sc = xs('xImgSize').value, v = viewSize();
+      const s = what === 'window' ? null : sc === '2160' ? { w: Math.round(2160 * v.w / v.h), h: 2160 } : { w: v.w * +sc * Math.min(2, window.devicePixelRatio || 1), h: v.h * +sc * Math.min(2, window.devicePixelRatio || 1) };
+      sum.innerHTML = 'The picture on screen now, at <b>' + fmtTime(simT) + '</b> (layer ' + (job.layer[Math.min(curMove, job.moves - 1)] - layerOffset() + 1) + ')' +
+        (s ? ' · <b>' + Math.round(s.w) + '×' + Math.round(s.h) + '</b>' : ' · the whole window, as you see it');
+      xs('xImgSize').disabled = what === 'window';
+      xs('xGo').disabled = false; return;
+    }
+    const p = exportPlan();
+    if (p.err) { sum.innerHTML = '<span class="warn">' + p.err + '</span>'; xs('xGo').disabled = true; return; }
+    const warn = [];
+    if (p.fmt === 'gif' && p.frames > 900) warn.push('A GIF this long is very large; MP4 is much smaller.');
+    if (p.frames > 36000) warn.push('That is a lot of frames; consider a higher speed.');
+    if (p.fmt !== 'gif' && !X.codecs[p.fmt]) warn.push(p.fmt.toUpperCase() + ' video is not supported here.');
+    sum.innerHTML = '<b>' + fmtTime(p.t0) + ' → ' + fmtTime(p.t1) + '</b> of the print at ' + (p.speed >= 10 ? Math.round(p.speed) : +p.speed.toFixed(2)) + '× → a <b>' +
+      fmtLong(p.length) + '</b> video · ' + p.frames + ' frames · ' + p.size.w + '×' + p.size.h +
+      (p.fmt === 'mp4' && X.codecs.mp4 === 'vp9' ? '<br><span class="warn">H.264 isn’t available on this system: the MP4 uses VP9 instead.</span>' : '') +
+      (warn.length ? '<br><span class="warn">' + warn.join(' ') + '</span>' : '');
+    xs('xGo').disabled = p.fmt !== 'gif' && !X.codecs[p.fmt];
+  }
+  // which encoders this browser has (checked once, at a common size)
+  async function probeCodecs() {
+    if (X.codecs) return X.codecs;
+    const c = { mp4: null, webm: null };
+    if (typeof VideoEncoder === 'function') {
+      const ok = async (codec) => { try { return (await VideoEncoder.isConfigSupported({ codec, width: 1280, height: 720, bitrate: 4e6, framerate: 30 })).supported; } catch (e) { return false; } };
+      if (await ok('avc1.640028') || await ok('avc1.42001f')) c.mp4 = 'avc'; else if (await ok('vp09.00.10.08')) c.mp4 = 'vp9';
+      if (await ok('vp09.00.10.08')) c.webm = 'vp9'; else if (await ok('vp8')) c.webm = 'vp8';
+    }
+    X.codecs = c;
+    for (const o of xs('xFmt').options) if (o.value !== 'gif') o.disabled = !c[o.value];
+    if (xs('xFmt').selectedOptions[0].disabled) xs('xFmt').value = c.webm ? 'webm' : 'gif';
+    return c;
+  }
+  function setExportTab(tab) {
+    X.tab = tab;
+    xs('xTabVideo').classList.toggle('on', tab === 'video'); xs('xTabImage').classList.toggle('on', tab === 'image');
+    xs('xTabVideo').setAttribute('aria-selected', tab === 'video'); xs('xTabImage').setAttribute('aria-selected', tab === 'image');
+    xs('xVideo').hidden = tab !== 'video'; xs('xImage').hidden = tab !== 'image';
+    updateExportSummary();
+  }
+  function showRangeRows() {
+    const m = xs('xRange').value;
+    xs('xLayersRow').hidden = m !== 'layers'; xs('xEventsRow').hidden = m !== 'events'; xs('xTimeRow').hidden = m !== 'time';
+    updateExportSummary();
+  }
+  async function openExport() {
+    if (!job || X.running) return;
+    setPlaying(false);
+    X.open = true; xs('expDlg').hidden = false; xs('xProg').hidden = true;
+    const so = layerOffset(), n = job.layers.length - so, cur = job.layer[Math.min(curMove, job.moves - 1)] - so + 1;
+    xs('xL0').max = xs('xL1').max = n;
+    if (!xs('xL0').value) { xs('xL0').value = 1; xs('xL1').value = n; }
+    if (!xs('xT0').value) { xs('xT0').value = fmtTime(simT); xs('xT1').value = fmtTime(Math.min(job.total, simT + 60)); }
+    if (+xs('xL0').value > n) xs('xL0').value = 1;
+    if (+xs('xL1').value > n) xs('xL1').value = n;
+    fillEventSelects();
+    if (!X.inited) {
+      X.inited = true;
+      xs('xFps').value = '30'; xs('xSize').value = '1080'; xs('xSpeed').value = 'fit30';
+    }
+    void cur;
+    await probeCodecs();
+    setExportTab(X.tab); showRangeRows();
+    (X.tab === 'video' ? xs('xRange') : xs('xImgFmt')).focus();
+  }
+  function closeExport() {
+    if (X.running) { X.cancel = true; return; }
+    X.open = false; xs('expDlg').hidden = true; canvas.focus({ preventScroll: true });
+  }
+  xs('expBtn').onclick = openExport;
+  xs('xClose').onclick = closeExport; xs('xCancel').onclick = closeExport;
+  xs('expDlg').addEventListener('pointerdown', (e) => { if (e.target === xs('expDlg') && !X.running) closeExport(); });
+  xs('expDlg').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeExport(); } e.stopPropagation(); });
+  xs('xTabVideo').onclick = () => setExportTab('video'); xs('xTabImage').onclick = () => setExportTab('image');
+  xs('xRange').onchange = showRangeRows;
+  for (const id of ['xL0', 'xL1', 'xEv0', 'xEv1', 'xT0', 'xT1', 'xFmt', 'xSpeed', 'xSize', 'xFps', 'xImgFmt', 'xImgSize'])
+    xs(id).addEventListener(id.startsWith('xT') || id.startsWith('xL') ? 'input' : 'change', updateExportSummary);
+  for (const r of document.querySelectorAll('input[name=xWhat]')) r.onchange = updateExportSummary;
+  xs('xFmt').addEventListener('change', () => {
+    // GIFs: modest size and frame rate by default
+    if (xs('xFmt').value === 'gif') { if (+xs('xFps').value > 24) xs('xFps').value = '15'; if (['1080', '1440', '2160'].includes(xs('xSize').value)) xs('xSize').value = '480'; }
+    updateExportSummary();
+  });
+  xs('xNow').onclick = () => { xs('xT0').value = fmtTime(simT); updateExportSummary(); };
+
+  /* --- rendering at a given size; everything is put back afterwards */
+  function withRenderSize(w, h, fn) {
+    const pr = renderer.getPixelRatio();
+    renderer.setPixelRatio(1); renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+    if (lineMat) { lineMat.resolution.set(w, h); lineMatPartial.resolution.set(w, h); }
+    try { return fn(); } finally { renderer.setPixelRatio(pr); resize(); }
+  }
+  async function withRenderSizeAsync(w, h, fn) {
+    const pr = renderer.getPixelRatio();
+    const apply = () => {
+      renderer.setPixelRatio(1); renderer.setSize(w, h, false);
+      camera.aspect = w / h; camera.updateProjectionMatrix();
+      if (lineMat) { lineMat.resolution.set(w, h); lineMatPartial.resolution.set(w, h); }
+    };
+    apply(); X.applySize = apply;
+    try { return await fn(); } finally { X.applySize = null; renderer.setPixelRatio(pr); resize(); }
+  }
+  function renderAt(t) {
+    simT = Math.max(0, Math.min(job.total, t));
+    updateScene(true); controls.update();
+    renderer.render(scene, camera); dirty = false;
+  }
+  function progress(frac, text) {
+    xs('xBar').style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + '%';
+    if (text != null) xs('xProgText').textContent = text;
+  }
+  const sleep0 = () => new Promise((r) => setTimeout(r, 0));
+
+  async function encodeVideo(p) {
+    const { w, h } = p.size, fps = p.fps, dtSim = p.speed / fps;
+    const frameUs = 1e6 / fps;
+    const bitrate = Math.max(2e6, Math.min(60e6, w * h * fps * 0.12));
+    if (p.fmt === 'gif') {
+      const { GIFEncoder, quantize, applyPalette } = window.gifenc;
+      const gif = GIFEncoder(), c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
+      const g2 = c2.getContext('2d', { willReadFrequently: true });
+      const delay = Math.round(100 / fps) * 10;
+      await withRenderSizeAsync(w, h, async () => {
+        for (let i = 0; i < p.frames; i++) {
+          if (X.cancel) throw new Error('cancelled');
+          if (X.applySize) X.applySize();
+          renderAt(p.t0 + i * dtSim);
+          g2.drawImage(canvas, 0, 0, w, h);
+          const data = g2.getImageData(0, 0, w, h).data;
+          const palette = quantize(data, 256, { format: 'rgb565' });
+          gif.writeFrame(applyPalette(data, palette, 'rgb565'), w, h, { palette, delay });
+          if (i % 2 === 0) { progress((i + 1) / p.frames, 'Frame ' + (i + 1) + ' of ' + p.frames); await sleep0(); }
+        }
+      });
+      gif.finish();
+      return new Blob([gif.bytes()], { type: 'image/gif' });
+    }
+    const kind = X.codecs[p.fmt];
+    let codec, muxer, target;
+    if (kind === 'avc') {
+      const big = w * h > 1920 * 1088;
+      const cands = big ? ['avc1.640033', 'avc1.640034', 'avc1.4d0033'] : ['avc1.640028', 'avc1.4d0028', 'avc1.42001f', 'avc1.640033'];
+      for (const c of cands) {
+        try { if ((await VideoEncoder.isConfigSupported({ codec: c, width: w, height: h, bitrate, framerate: fps, avc: { format: 'avc' } })).supported) { codec = c; break; } } catch (e) { /* next */ }
+      }
+    } else {
+      for (const c of kind === 'vp8' ? ['vp8'] : ['vp09.00.40.08', 'vp09.00.31.08', 'vp09.00.10.08']) {
+        try { if ((await VideoEncoder.isConfigSupported({ codec: c, width: w, height: h, bitrate, framerate: fps })).supported) { codec = c; break; } } catch (e) { /* next */ }
+      }
+    }
+    if (!codec) throw new Error(w + '×' + h + ' is too large for this video encoder; pick a smaller size.');
+    if (p.fmt === 'mp4') {
+      target = new Mp4Muxer.ArrayBufferTarget();
+      muxer = new Mp4Muxer.Muxer({ target, video: { codec: kind === 'avc' ? 'avc' : 'vp9', width: w, height: h, frameRate: fps }, fastStart: 'in-memory' });
+    } else {
+      target = new WebMMuxer.ArrayBufferTarget();
+      muxer = new WebMMuxer.Muxer({ target, video: { codec: kind === 'vp8' ? 'V_VP8' : 'V_VP9', width: w, height: h, frameRate: fps } });
+    }
+    let encErr = null;
+    const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { encErr = e; } });
+    enc.configure(Object.assign({ codec, width: w, height: h, bitrate, framerate: fps, latencyMode: 'quality' }, kind === 'avc' ? { avc: { format: 'avc' } } : {}));
+    try {
+      await withRenderSizeAsync(w, h, async () => {
+        for (let i = 0; i < p.frames; i++) {
+          if (X.cancel) throw new Error('cancelled');
+          if (encErr) throw encErr;
+          if (X.applySize) X.applySize();
+          renderAt(p.t0 + i * dtSim);
+          const vf = new VideoFrame(canvas, { timestamp: Math.round(i * frameUs), duration: Math.round(frameUs) });
+          enc.encode(vf, { keyFrame: i % (fps * 2) === 0 }); vf.close();
+          while (enc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 2));
+          if (i % 3 === 0) { progress((i + 1) / p.frames, 'Frame ' + (i + 1) + ' of ' + p.frames); await sleep0(); }
+        }
+      });
+      progress(1, 'Finishing…');
+      await enc.flush();
+      if (encErr) throw encErr;
+      muxer.finalize();
+    } finally { if (enc.state !== 'closed') enc.close(); }
+    return new Blob([target.buffer], { type: p.fmt === 'mp4' ? 'video/mp4' : 'video/webm' });
+  }
+
+  function canvasToBlob(c, type, q) { return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode the image.'))), type, q)); }
+  async function captureImage(what, fmt, scale) {
+    const type = 'image/' + fmt, q = fmt === 'png' ? undefined : 0.92;
+    const v = viewSize(), dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (what === 'render') {
+      const h = scale === '2160' ? 2160 : Math.round(v.h * +scale * dpr), w = Math.round(h * v.w / v.h);
+      const c2 = document.createElement('canvas'); c2.width = w; c2.height = h;
+      withRenderSize(w, h, () => { renderAt(simT); c2.getContext('2d').drawImage(canvas, 0, 0); });
+      renderAt(simT);
+      return canvasToBlob(c2, type, q);
+    }
+    // whole window: the page drawn by the browser inside an SVG, canvases pasted in as pictures
+    renderAt(simT);
+    const shots = new Map();
+    for (const c of document.querySelectorAll('canvas')) { try { shots.set(c, c.toDataURL('image/png')); } catch (e) { /* skip */ } }
+    const W = document.documentElement.clientWidth, H = document.documentElement.clientHeight;
+    const clone = document.documentElement.cloneNode(true);
+    const origAll = document.documentElement.querySelectorAll('*'), cloneAll = clone.querySelectorAll('*');
+    for (let i = 0; i < origAll.length; i++) {
+      const o = origAll[i], c = cloneAll[i];
+      if (o.tagName === 'SCRIPT') { c.remove(); continue; }
+      if (o.id === 'expDlg' || o.id === 'toast') { c.remove(); continue; }
+      if (o.tagName === 'CANVAS' && shots.has(o)) {
+        const img = document.createElement('img'); img.src = shots.get(o);
+        img.setAttribute('style', (o.getAttribute('style') || '') + ';width:' + o.clientWidth + 'px;height:' + o.clientHeight + 'px;display:block');
+        if (o.id) img.id = o.id;
+        img.className = o.className; c.replaceWith(img); continue;
+      }
+      if (o.tagName === 'SELECT') { for (const opt of c.querySelectorAll('option')) opt.toggleAttribute('selected', opt.value === o.value); }
+      else if (o.tagName === 'INPUT') { if (o.type === 'checkbox' || o.type === 'radio') c.toggleAttribute('checked', o.checked); else c.setAttribute('value', o.value); }
+      if (o.scrollTop) c.setAttribute('data-scroll', o.scrollTop);
+    }
+    // inline the CSS variables and colours the host set on <html> (theme), and pin the page size
+    clone.setAttribute('style', (document.documentElement.getAttribute('style') || '') + ';width:' + W + 'px;height:' + H + 'px');
+    const xml = new XMLSerializer().serializeToString(clone);
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W * dpr + '" height="' + H * dpr + '" viewBox="0 0 ' + W + ' ' + H + '">' +
+                '<foreignObject x="0" y="0" width="' + W + '" height="' + H + '">' + xml + '</foreignObject></svg>';
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('Could not draw the window.')); img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg); });
+    const c2 = document.createElement('canvas'); c2.width = Math.round(W * dpr); c2.height = Math.round(H * dpr);
+    const g = c2.getContext('2d'); g.fillStyle = getComputedStyle(document.body).backgroundColor || '#1e2023'; g.fillRect(0, 0, c2.width, c2.height);
+    g.drawImage(img, 0, 0, c2.width, c2.height);
+    return canvasToBlob(c2, type, q);
+  }
+
+  /* --- saving: the system's Save dialog when there is one (Windows/Chromium), else the plugin
+     writes it into its own exports folder (OrcaSlicer on macOS/Linux), else a browser download */
+  const MIME = { mp4: 'video/mp4', webm: 'video/webm', gif: 'image/gif', png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp' };
+  function exportName(ext) {
+    const base = String((currentMeta && currentMeta.name) || 'print').replace(/\.gcode(\.3mf)?$/i, '').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80) || 'print';
+    return base + (X.tab === 'image' ? '_' + fmtTime(simT).replace(/:/g, '-') : '') + '.' + (ext === 'jpeg' ? 'jpg' : ext);
+  }
+  async function pickSaveTarget(name, ext) {
+    if (typeof window.showSaveFilePicker !== 'function') return null;
+    const accept = {}; accept[MIME[ext]] = ['.' + (ext === 'jpeg' ? 'jpg' : ext)];
+    try { return await window.showSaveFilePicker({ suggestedName: name, types: [{ description: ext.toUpperCase(), accept }] }); }
+    catch (e) { if (e && e.name === 'AbortError') return 'cancelled'; return null; }
+  }
+  const pendingSaves = new Map();
+  function saveViaPlugin(name, blob) {
+    return new Promise(async (resolve, reject) => {
+      const id = 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      pendingSaves.set(id, { resolve, reject });
+      const buf = new Uint8Array(await blob.arrayBuffer()), CH = 384 * 1024, n = Math.max(1, Math.ceil(buf.length / CH));
+      send({ cmd: 'save_begin', id, name, size: buf.length, chunks: n });
+      for (let i = 0; i < n; i++) {
+        let bin = ''; const part = buf.subarray(i * CH, (i + 1) * CH);
+        for (let j = 0; j < part.length; j += 0x8000) bin += String.fromCharCode.apply(null, part.subarray(j, j + 0x8000));
+        send({ cmd: 'save_chunk', id, i, data: btoa(bin) });
+        if (i % 4 === 3) { progress((i + 1) / n, 'Saving…'); await sleep0(); }
+      }
+      send({ cmd: 'save_end', id });
+      setTimeout(() => { if (pendingSaves.has(id)) { pendingSaves.delete(id); reject(new Error('The plugin did not answer.')); } }, 30000);
+    });
+  }
+  function onSaved(msg) {
+    const p = pendingSaves.get(msg.id); if (!p) return;
+    pendingSaves.delete(msg.id);
+    if (msg.ok) p.resolve(msg.path); else p.reject(new Error(msg.error || 'Could not save the file.'));
+  }
+  async function deliver(blob, name, handle) {
+    if (handle && handle !== 'cancelled') {
+      const w = await handle.createWritable(); await w.write(blob); await w.close();
+      return 'Saved ' + handle.name;
+    }
+    if (host) { const path = await saveViaPlugin(name, blob); return 'Saved to ' + path; }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    return 'Downloaded ' + name;
+  }
+
+  async function runExport() {
+    if (!job || X.running) return;
+    const isImg = X.tab === 'image';
+    const plan = isImg ? null : exportPlan();
+    if (plan && plan.err) return;
+    const ext = isImg ? xs('xImgFmt').value : plan.fmt;
+    const name = exportName(ext);
+    // ask where to save first: the Save dialog has to open straight from the click
+    const handle = await pickSaveTarget(name, ext);
+    if (handle === 'cancelled') return;
+    X.running = true; X.cancel = false;
+    const keep = { t: simT };
+    xs('xProg').hidden = false; progress(0, isImg ? 'Capturing…' : 'Rendering…');
+    xs('xGo').disabled = true; xs('xCancel').textContent = 'Stop';
+    for (const el of xs('expDlg').querySelectorAll('select,input,.tabs button')) el.disabled = true;
+    let msg = null, isErr = false;
+    try {
+      const blob = isImg
+        ? await captureImage(document.querySelector('input[name=xWhat]:checked').value, ext, xs('xImgSize').value)
+        : await encodeVideo(plan);
+      progress(1, 'Saving…');
+      msg = await deliver(blob, name, handle) + ' (' + (blob.size >= 1e6 ? (blob.size / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(blob.size / 1e3)) + ' kB') + ')';
+    } catch (e) {
+      if (e && e.message === 'cancelled') msg = 'Export stopped.';
+      else { msg = 'Export failed: ' + (e && e.message ? e.message : e); isErr = true; console.error(e); }
+    } finally {
+      X.running = false; X.cancel = false;
+      simT = keep.t; updateScene(true); updateHud(); dirty = true;
+      for (const el of xs('expDlg').querySelectorAll('select,input,.tabs button')) el.disabled = false;
+      xs('xCancel').textContent = 'Cancel'; xs('xProg').hidden = true;
+      updateExportSummary();
+    }
+    toast(msg, isErr);
+    if (!isErr && msg !== 'Export stopped.') closeExport();
+    X.last = { msg, isErr };
+  }
+  xs('xGo').onclick = runExport;
+
   window.PlaybackApp = { loadText, seek, setPlaying, get job() { return job; }, get time() { return simT; },
                          setPrefs(p) { Object.assign(prefs, p); syncOptionUI(); if (job) { if ("lines" in p) buildPaths(); else rebuildObjects(); computeColors(); if (R.main.userData.thin) R.main.geometry.attributes.color.needsUpdate = true; else R.main.geometry.setColors(R.col); updateScene(true); updateHud(); } },
                          frame, onHostMessage,
@@ -1426,6 +1819,9 @@
                          _pick(x, y) { const r = canvas.getBoundingClientRect(); const rc = new THREE.Raycaster();
                                        camera.updateMatrixWorld(); rc.setFromCamera(new THREE.Vector2((x - r.left) / r.width * 2 - 1, -(y - r.top) / r.height * 2 + 1), camera);
                                        const h = controls.pick(rc.ray); return h ? h.sub(bedGroup.position).toArray() : null; },
+                         _export: X, _runExport: runExport, _openExport: openExport,
+                         _exportPlan() { return exportPlan(); },
+                         _capture(what, fmt, scale) { return captureImage(what, fmt, scale); },
                          _cam() { const d = controls.target.clone().sub(camera.position); return { pos: camera.position.toArray(), posBed: camera.position.clone().sub(bedGroup.position).toArray(), dist: d.length(), dir: d.normalize().toArray(), up: new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1).toArray(), pivot: controls._pivot().sub(bedGroup.position).toArray() }; },
                          _project(pt) { camera.updateMatrixWorld(); const v = new THREE.Vector3(pt[0], pt[1], pt[2]).add(bedGroup.position).project(camera); const r = canvas.getBoundingClientRect();
                                         return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; },

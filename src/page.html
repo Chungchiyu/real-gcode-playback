@@ -166,6 +166,39 @@ label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(-
 #speedCustomWrap[hidden] { display: none; }
 #speedCustom { width: 72px; }
 kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px; padding: 0 4px; }
+
+/* export dialog */
+#expDlg { inset: 0; z-index: 20; display: grid; place-items: center; pointer-events: auto;
+          background: color-mix(in srgb, var(--bg) 55%, transparent); }
+#expDlg[hidden] { display: none; }
+#expDlg .box { width: min(420px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; background: var(--panel);
+               border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.35); padding: 12px 14px 12px; }
+#expDlg .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+#expDlg .head b { font-size: 13.5px; }
+#expDlg .tabs { display: inline-flex; background: var(--surface); border-radius: 8px; padding: 2px; margin-right: auto; }
+#expDlg .tabs button { border: 0; background: transparent; padding: 3px 12px; border-radius: 6px; }
+#expDlg .tabs button.on { background: var(--surface-2); color: var(--fg); }
+#expDlg .row { display: flex; align-items: center; gap: 10px; margin: 7px 0; min-width: 0; }
+#expDlg .row[hidden] { display: none; }
+#expDlg .row .k { flex: none; width: 76px; color: var(--muted); }
+#expDlg .row > select { flex: 1; min-width: 0; }
+#expDlg .row.sub { margin-top: -2px; }
+#expDlg .pair { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--muted); }
+#expDlg .pair.stack { flex-direction: column; align-items: stretch; }
+#expDlg .pair input[type=number] { width: 72px; }
+#expDlg .pair input[type=text] { width: 82px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 4px 7px; font-family: var(--mono); }
+#expDlg .pair input.bad { border-color: var(--bad); }
+#expDlg .radios { display: flex; flex-direction: column; gap: 4px; }
+#expDlg .radios label { display: flex; align-items: center; gap: 6px; }
+#expDlg .sum { margin: 10px 0 0; padding: 8px 10px; background: var(--surface); border-radius: 8px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+#expDlg .sum b { color: var(--fg); font-weight: 600; }
+#expDlg .sum .warn { color: var(--warn); }
+#expDlg .prog { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; color: var(--muted); }
+#expDlg .prog[hidden] { display: none; }
+#expDlg .pb { height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+#expDlg .pb i { display: block; height: 100%; background: var(--accent); width: 0; }
+#expDlg .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+#expBtn svg { vertical-align: -1px; }
 </style>
 </head>
 <body>
@@ -198,6 +231,9 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       <button id="tTravel" title="Show travel moves of the current layer (T)">Travel</button>
       <button id="tLayer" title="Show only the layer being printed (L)">Layer only</button>
       <button id="tFollow" title="Keep the camera on the nozzle (F)">Follow</button>
+      <button id="expBtn" title="Export a video or an image (E)" disabled>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+        Export</button>
       <button id="optBtn" title="More options">Options
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
     </div>
@@ -259,6 +295,73 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
       </div>
     </div>
     <div id="drop" class="overlay">Drop G-code to play it</div>
+    <div id="expDlg" class="overlay" hidden>
+      <div class="box" role="dialog" aria-modal="true" aria-labelledby="expTitle">
+        <div class="head">
+          <b id="expTitle">Export</b>
+          <div class="tabs" role="tablist">
+            <button role="tab" id="xTabVideo" class="on" aria-selected="true">Video</button>
+            <button role="tab" id="xTabImage" aria-selected="false">Image</button>
+          </div>
+          <button class="icon" id="xClose" title="Close (Esc)" aria-label="Close">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <div id="xVideo" class="pane">
+          <div class="row"><span class="k">Range</span>
+            <select id="xRange">
+              <option value="all">Whole print</option>
+              <option value="layer">Current layer</option>
+              <option value="layers">Layers…</option>
+              <option value="events">Between events…</option>
+              <option value="time">Custom time…</option>
+            </select></div>
+          <div class="row sub" id="xLayersRow" hidden><span class="k"></span>
+            <span class="pair">from <input type="number" id="xL0" min="1" step="1"> to <input type="number" id="xL1" min="1" step="1"></span></div>
+          <div class="row sub" id="xEventsRow" hidden><span class="k"></span>
+            <span class="pair stack"><select id="xEv0" aria-label="Start event"></select><select id="xEv1" aria-label="End event"></select></span></div>
+          <div class="row sub" id="xTimeRow" hidden><span class="k"></span>
+            <span class="pair"><input type="text" id="xT0" spellcheck="false" aria-label="Start time"> to <input type="text" id="xT1" spellcheck="false" aria-label="End time">
+              <button id="xNow" title="Start at the current playback time">Now</button></span></div>
+          <div class="row"><span class="k">Format</span>
+            <select id="xFmt">
+              <option value="mp4">MP4</option>
+              <option value="webm">WebM</option>
+              <option value="gif">GIF</option>
+            </select></div>
+          <div class="row"><span class="k">Speed</span>
+            <select id="xSpeed">
+              <option value="1">1× (real time)</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option>
+              <option value="25">25×</option><option value="50">50×</option><option value="100">100×</option><option value="250">250×</option>
+              <option value="500">500×</option><option value="1000">1000×</option>
+              <option value="fit15">Fit into 15 s</option><option value="fit30">Fit into 30 s</option><option value="fit60">Fit into 1 min</option>
+            </select></div>
+          <div class="row"><span class="k">Size</span>
+            <select id="xSize">
+              <option value="window">Window</option><option value="480">480p</option><option value="720">720p</option>
+              <option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">4K</option>
+            </select></div>
+          <div class="row"><span class="k">Frame rate</span>
+            <select id="xFps"><option value="15">15 fps</option><option value="24">24 fps</option><option value="30">30 fps</option><option value="60">60 fps</option></select></div>
+        </div>
+        <div id="xImage" class="pane" hidden>
+          <div class="row"><span class="k">Content</span>
+            <span class="radios">
+              <label><input type="radio" name="xWhat" value="render" checked> 3D view only</label>
+              <label><input type="radio" name="xWhat" value="window"> Whole window, with panels</label>
+            </span></div>
+          <div class="row"><span class="k">Format</span>
+            <select id="xImgFmt"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></div>
+          <div class="row"><span class="k">Size</span>
+            <select id="xImgSize"><option value="1">Window</option><option value="2">2× window</option><option value="2160">4K</option></select></div>
+        </div>
+        <div class="sum" id="xSum"></div>
+        <div class="prog" id="xProg" hidden><div class="pb"><i id="xBar"></i></div><span id="xProgText"></span></div>
+        <div class="foot">
+          <button id="xCancel">Cancel</button>
+          <button class="primary" id="xGo">Export</button>
+        </div>
+      </div>
+    </div>
     <div id="busy" class="overlay"><div class="box"><div id="busyText">Loading…</div><div class="pb"><i id="busyBar"></i></div></div></div>
     <div id="toast" class="overlay"></div>
     <div id="newSlice" class="overlay" hidden>

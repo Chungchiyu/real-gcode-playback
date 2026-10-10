@@ -29,7 +29,8 @@ Two capabilities:
 Without the capture capability the tab falls back to finding OrcaSlicer's temporary G-code for
 the last slice; OrcaSlicer asks once for read permission on those files.
 
-Files this plugin writes: only inside its own folder (.captures/latest.gcode + latest.json).
+Files this plugin writes: only inside its own folder (.captures/latest.gcode + latest.json, and
+exports/ for videos and pictures when OrcaSlicer's page can't show a Save dialog).
 No network access, no processes started.
 """
 
@@ -51,6 +52,10 @@ CAPTURE_FILE = os.path.join(CAPTURE_DIR, "latest.gcode")
 CAPTURE_META = os.path.join(CAPTURE_DIR, "latest.json")
 CHUNK_CHARS = 384 * 1024            # per message; each is one RunScript call into the page
 CAPTURE_NAME = "Playback capture"
+# videos and pictures from the Export dialog, when the page can't open the system's Save dialog
+EXPORT_DIR = os.path.join(PLUGIN_DIR, "exports")
+EXPORT_EXTS = {".mp4", ".webm", ".gif", ".png", ".jpg", ".jpeg", ".webp"}
+EXPORT_MAX = 4 * 1024 * 1024 * 1024
 
 DEFAULT_PREFS = {"speed": 10, "color": "feature", "travel": False, "layerOnly": False, "follow": False,
                  "motion": "auto", "lines": "fat", "timing": "aligned", "head": True, "gantry": True, "shade": "tube", "flags": {}, "pauseOnLeave": True}
@@ -251,6 +256,8 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                 if not self.loading:
                     self.loading = True
                     threading.Thread(target=self.send_latest, args=(bool(msg.get("quiet")),), daemon=True).start()
+            elif cmd in ("save_begin", "save_chunk", "save_end"):
+                self.on_save(cmd, msg)
             elif cmd == "save_prefs":
                 prefs = msg.get("prefs")
                 if isinstance(prefs, dict):
@@ -258,6 +265,43 @@ class PlaybackPage(orca.pages.PagesPluginCapabilityBase):
                     self.save_config(json.dumps({"prefs": clean}))
         except Exception as exc:
             self.post({"cmd": "error", "message": str(exc)[:300]})
+
+    # ---- export: the page sends a finished file in base64 chunks -------------
+    def on_save(self, cmd, msg):
+        saves = self.__dict__.setdefault("saves", {})
+        sid = str(msg.get("id", ""))[:40]
+        if cmd == "save_begin":
+            name = os.path.basename(str(msg.get("name") or "export"))
+            name = "".join(ch if ch.isalnum() or ch in "-_. ()" else "_" for ch in name).strip(" .") or "export"
+            stem, ext = os.path.splitext(name)
+            if ext.lower() not in EXPORT_EXTS:
+                self.post({"cmd": "saved", "id": sid, "ok": False, "error": "Unsupported file type"})
+                return
+            if int(msg.get("size") or 0) > EXPORT_MAX:
+                self.post({"cmd": "saved", "id": sid, "ok": False, "error": "File too large"})
+                return
+            os.makedirs(EXPORT_DIR, exist_ok=True)
+            path, n = os.path.join(EXPORT_DIR, stem + ext), 2
+            while os.path.exists(path):
+                path = os.path.join(EXPORT_DIR, f"{stem} ({n}){ext}"); n += 1
+            saves[sid] = {"path": path, "f": open(path, "wb"), "next": 0}
+        elif cmd == "save_chunk":
+            sv = saves.get(sid)
+            if not sv:
+                return
+            if int(msg.get("i", -1)) != sv["next"]:
+                sv["f"].close(); saves.pop(sid, None)
+                self.post({"cmd": "saved", "id": sid, "ok": False, "error": "Parts arrived out of order"})
+                return
+            sv["f"].write(base64.b64decode(msg.get("data") or ""))
+            sv["next"] += 1
+        else:
+            sv = saves.pop(sid, None)
+            if not sv:
+                self.post({"cmd": "saved", "id": sid, "ok": False, "error": "Unknown export"})
+                return
+            sv["f"].close()
+            self.post({"cmd": "saved", "id": sid, "ok": True, "path": sv["path"]})
 
     # ---- lifecycle: a slice finished somewhere in OrcaSlicer ----------------
     def on_lifecycle_event(self, event, ctx):

@@ -21,6 +21,17 @@ VENDOR_FILES = [
 ]
 vendor = "\n;\n".join(p.read_text(encoding="utf-8") for p in VENDOR_FILES)
 vendor = "/* three.js r147 (MIT License, Copyright 2010-2022 Three.js Authors) */\n" + vendor
+
+# export: video muxers and the GIF encoder (all MIT, see README)
+NM = ROOT / "node_modules"
+gifenc = (NM / "gifenc/dist/gifenc.js").read_text(encoding="utf-8")   # CommonJS: give it an exports object
+EXPORT_LIBS = [
+    "/* mp4-muxer 5.2.2 (MIT License, Copyright (c) 2023 Vanilagy) */\n" + (NM / "mp4-muxer/build/mp4-muxer.js").read_text(encoding="utf-8"),
+    "/* webm-muxer 5.1.4 (MIT License, Copyright (c) 2022 Vanilagy) */\n" + (NM / "webm-muxer/build/webm-muxer.js").read_text(encoding="utf-8"),
+    "/* gifenc 1.0.3 (MIT License, Copyright (c) 2017 Matt DesLauriers) */\n"
+    "window.gifenc = (function () { var exports = {}, module = { exports: exports };\n" + gifenc + "\nreturn module.exports; })();",
+]
+vendor = vendor + "\n;\n" + "\n;\n".join(EXPORT_LIBS)
 import json as _json
 core = (SRC / "core.js").read_text(encoding="utf-8")
 core = "window.PLAYBACK_ABOUT = " + _json.dumps(_json.loads((SRC / "changelog.json").read_text(encoding="utf-8")), ensure_ascii=False) + ";\n" + core
