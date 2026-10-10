@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.6.0 (2026-10-11)
+- Export videos (MP4, WebM, GIF) of the whole print, the current layer, a range of layers, the time between two events or any time span, at a chosen speed, size and frame rate
+- Export pictures (PNG, JPEG, WebP) of the 3D view or of the whole window with its panels
+- The Export dialog shows the expected file size, and where the file was saved
+
 ## v1.5.0 (2026-10-10)
 - Lines are drawn with their actual width and height from the G-code, so scarf seams, Z contouring and variable-width walls look as they print
 - Colour by line height or line width; the readout shows the current line's width × height

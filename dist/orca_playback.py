@@ -5,12 +5,16 @@
 # name = "Real G-code Playback"
 # description = "Real-time playback of the sliced G-code in its own tab: a motion-planned, accelerations-and-corners timeline of the print, synced to the slicer's own time estimate."
 # author = "NickChung"
-# version = "1.5.0"
+# version = "1.6.0"
 # ///
 """Real G-code Playback — watch the sliced G-code print in real time, in an OrcaSlicer tab.
 
 Changelog
 ---------
+1.6.0 (2026-10-11)
+  - Export videos (MP4, WebM, GIF) of the whole print, the current layer, a range of layers, the time between two events or any time span, at a chosen speed, size and frame rate
+  - Export pictures (PNG, JPEG, WebP) of the 3D view or of the whole window with its panels
+  - The Export dialog shows the expected file size, and where the file was saved
 1.5.0 (2026-10-10)
   - Lines are drawn with their actual width and height from the G-code, so scarf seams, Z contouring and variable-width walls look as they print
   - Colour by line height or line width; the readout shows the current line's width × height
@@ -108,8 +112,17 @@ SETUP_HINT = {
 }
 
 CHANGELOG = {
- "version": "1.5.0",
+ "version": "1.6.0",
  "entries": [
+  {
+   "version": "1.6.0",
+   "date": "2026-10-11",
+   "changes": [
+    "Export videos (MP4, WebM, GIF) of the whole print, the current layer, a range of layers, the time between two events or any time span, at a chosen speed, size and frame rate",
+    "Export pictures (PNG, JPEG, WebP) of the 3D view or of the whole window with its panels",
+    "The Export dialog shows the expected file size, and where the file was saved"
+   ]
+  },
   {
    "version": "1.5.0",
    "date": "2026-10-10",
@@ -668,7 +681,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
 </div>
 
 <script>/*@@VENDOR@@*/</script>
-<script>window.PLAYBACK_ABOUT = {"version": "1.5.0", "entries": [{"version": "1.5.0", "date": "2026-10-10", "changes": ["Lines are drawn with their actual width and height from the G-code, so scarf seams, Z contouring and variable-width walls look as they print", "Colour by line height or line width; the readout shows the current line's width × height", "Rotating turns about the middle of the screen, at the print straight ahead, and can go straight overhead without flickering; the wheel zooms toward the cursor", "Fixed zooming sometimes getting stuck until you clicked", "A new slice keeps the camera and the time"]}, {"version": "1.4.3", "date": "2026-10-09", "changes": ["Fixed playback running far too fast in the first part of Bambu Lab prints with bed leveling (since 1.3.0)"]}, {"version": "1.4.2", "date": "2026-10-09", "changes": ["Pausing when you click another tab now works in OrcaSlicer"]}, {"version": "1.4.1", "date": "2026-10-09", "changes": ["Clearer setup instructions on the start screen"]}, {"version": "1.4.0", "date": "2026-10-09", "changes": ["Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)", "Option to keep playing when you leave the Playback tab"]}, {"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
+<script>window.PLAYBACK_ABOUT = {"version": "1.6.0", "entries": [{"version": "1.6.0", "date": "2026-10-11", "changes": ["Export videos (MP4, WebM, GIF) of the whole print, the current layer, a range of layers, the time between two events or any time span, at a chosen speed, size and frame rate", "Export pictures (PNG, JPEG, WebP) of the 3D view or of the whole window with its panels", "The Export dialog shows the expected file size, and where the file was saved"]}, {"version": "1.5.0", "date": "2026-10-10", "changes": ["Lines are drawn with their actual width and height from the G-code, so scarf seams, Z contouring and variable-width walls look as they print", "Colour by line height or line width; the readout shows the current line's width × height", "Rotating turns about the middle of the screen, at the print straight ahead, and can go straight overhead without flickering; the wheel zooms toward the cursor", "Fixed zooming sometimes getting stuck until you clicked", "A new slice keeps the camera and the time"]}, {"version": "1.4.3", "date": "2026-10-09", "changes": ["Fixed playback running far too fast in the first part of Bambu Lab prints with bed leveling (since 1.3.0)"]}, {"version": "1.4.2", "date": "2026-10-09", "changes": ["Pausing when you click another tab now works in OrcaSlicer"]}, {"version": "1.4.1", "date": "2026-10-09", "changes": ["Clearer setup instructions on the start screen"]}, {"version": "1.4.0", "date": "2026-10-09", "changes": ["Custom playback speed, including slow motion (0.1×, 0.25×, 0.5× or any value)", "Option to keep playing when you leave the Playback tab"]}, {"version": "1.3.0", "date": "2026-10-09", "changes": ["Print options: choose bed leveling, flow calibration, timelapse and the other printer flags in the G-code; blocks the printer would skip are not drawn or timed", "Bed leveling counts as 260 s, as in OrcaSlicer's estimate"]}, {"version": "1.2.1", "date": "2026-10-09", "changes": ["G-code panel keeps the running line centred while playing", "G-code panel button moved to the front of the current line"]}, {"version": "1.2.0", "date": "2026-10-09", "changes": ["G-code panel: expand the current-line readout to scroll through the whole file; it follows playback, and clicking a line jumps to that moment"]}, {"version": "1.1.1", "date": "2026-10-09", "changes": ["Packaging aligned with the OrcaSlicer plugin rules for Orca Cloud upload"]}, {"version": "1.1.0", "date": "2026-10-08", "changes": ["Opening the tab loads a new slice automatically when nothing is loaded, and asks before replacing one that is", "Playback pauses when you leave the tab", "Shading options: round lit lines, layer contrast, height shading, flat colours", "Hot end and gantry can be shown or hidden separately", "Playback controls centred in the bottom bar"]}, {"version": "1.0.0", "date": "2026-10-08", "changes": ["Playback tab: real-time playback of the sliced G-code", "Motion planner with acceleration and cornering, synced to the slicer's time estimate", "Timeline with layer bands and filament change, pause and heating markers", "Colour by line type, actual speed, set speed, volumetric flow, layer time or filament", "Moving-bed view for bed slingers such as the A1 mini", "Loads the latest slice, or a .gcode / .gcode.3mf file", "Playback capture step for loading slices without permission prompts"]}]};
 /* Playback core: G-code parser + motion planner. Pure JS, no DOM, so it runs in node for tests.
  *
  * parseGcode(text, opts) -> Job
