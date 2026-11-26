@@ -813,6 +813,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
   function parseGcode(text, opts) {
     opts = opts || {};
     const progress = opts.progress || null;
+    const isKlipper = /^;\s*gcode_flavor\s*=\s*klipper\s*$/im.test(text);
     const est = Math.max(1024, (text.length / 30) | 0);
     const P = new Grow(Float32Array, (est + 1) * 3);
     const G = {
@@ -1003,7 +1004,7 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
           if (!isNaN(word.X)) tx = absXYZ ? word.X : x + word.X;
           if (!isNaN(word.Y)) ty = absXYZ ? word.Y : y + word.Y;
           if (!isNaN(word.Z)) tz = absXYZ ? word.Z : z + word.Z;
-          if (!isNaN(word.E)) te = absE ? word.E : e + word.E;
+          if (!isNaN(word.E)) te = (absE && (!isKlipper || absXYZ)) ? word.E : e + word.E;
           const dE = te - e;
           if (!started && (!isNaN(word.X) || !isNaN(word.Y))) {
             // jump to the first commanded position instead of drawing a travel from 0,0
@@ -1033,9 +1034,13 @@ kbd { font: 10.5px var(--mono); background: var(--surface-2); border-radius: 4px
           else { if (!isNaN(word.X)) x = 0; if (!isNaN(word.Y)) y = 0; if (!isNaN(word.Z)) z = 0; }
           ox = oy = oz = 0;
           pendingStop = true;
-        } else if (g === 90) { absXYZ = true; absE = true; }
-        else if (g === 91) { absXYZ = false; absE = false; }
-        else if (g === 92) {
+        } else if (g === 90) {
+          absXYZ = true;
+          if (!isKlipper) absE = true;
+        } else if (g === 91) {
+          absXYZ = false;
+          if (!isKlipper) absE = false;
+        } else if (g === 92) {
           if (!isNaN(word.E)) e = word.E;
           if (!isNaN(word.X)) { ox = phys(0) - word.X; x = word.X; }
           if (!isNaN(word.Y)) { oy = phys(1) - word.Y; y = word.Y; }
